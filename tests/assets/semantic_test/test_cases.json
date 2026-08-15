@@ -1,0 +1,165 @@
+{
+  "description": "Cross-Modal Semantic Alignment Ground Truth Test Suite for SigLIP 2",
+  "test_cases": [
+    {
+      "id": 1,
+      "filename_stem": "01_mountain_snow",
+      "category": "Mountain / Alpine",
+      "expected_scene": "Snowy mountain summit peak with blue sky",
+      "positive_prompt": "a snowy mountain peak summit with blue sky",
+      "negative_prompt": "a sunny tropical beach with turquoise ocean water"
+    },
+    {
+      "id": 2,
+      "filename_stem": "02_beach_ocean",
+      "category": "Beach / Coastal",
+      "expected_scene": "Sunny tropical beach with clear ocean water and sand",
+      "positive_prompt": "a sunny tropical beach with clear blue ocean water",
+      "negative_prompt": "a snowy mountain peak summit with blue sky"
+    },
+    {
+      "id": 3,
+      "filename_stem": "03_forest_trees",
+      "category": "Forest / Woodland",
+      "expected_scene": "Lush green forest with tall trees and sunlight",
+      "positive_prompt": "a green woodland forest with tall trees and sunlight",
+      "negative_prompt": "a modern city skyline at night with skyscrapers"
+    },
+    {
+      "id": 4,
+      "filename_stem": "04_desert_dunes",
+      "category": "Desert / Dunes",
+      "expected_scene": "Dry desert landscape with sand dunes under bright sunlight",
+      "positive_prompt": "a hot dry desert with golden sand dunes under the sun",
+      "negative_prompt": "a rainy city street with wet pavement and puddles"
+    },
+    {
+      "id": 5,
+      "filename_stem": "05_friends_dinner",
+      "category": "Social / Dining",
+      "expected_scene": "Group of friends or family having dinner and drinks around a table",
+      "positive_prompt": "a group of friends having dinner and drinks around a dining table",
+      "negative_prompt": "an empty dark warehouse"
+    },
+    {
+      "id": 6,
+      "filename_stem": "06_birthday_cake",
+      "category": "Celebration / Birthday",
+      "expected_scene": "Birthday cake with lit candles during a party",
+      "positive_prompt": "a birthday celebration with lit candles on a cake",
+      "negative_prompt": "a mechanic repairing a car engine in a garage"
+    },
+    {
+      "id": 7,
+      "filename_stem": "07_wedding_couple",
+      "category": "Wedding / Romantic",
+      "expected_scene": "Bride and groom or romantic couple in formal celebration",
+      "positive_prompt": "a wedding couple celebrating in wedding attire",
+      "negative_prompt": "a freight cargo ship in an industrial port"
+    },
+    {
+      "id": 8,
+      "filename_stem": "08_sunset_golden_hour",
+      "category": "Sunset / Golden Hour",
+      "expected_scene": "Vibrant orange sunset over horizon or skyline",
+      "positive_prompt": "a vibrant golden hour sunset with warm orange sky",
+      "negative_prompt": "a cold winter blizzard with dark heavy snow"
+    },
+    {
+      "id": 9,
+      "filename_stem": "09_night_stars",
+      "category": "Night Sky / Astronomy",
+      "expected_scene": "Clear starry night sky or Milky Way",
+      "positive_prompt": "a clear dark night sky full of bright stars and galaxy",
+      "negative_prompt": "a bright sunny afternoon picnic in a park"
+    },
+    {
+      "id": 10,
+      "filename_stem": "10_rainy_day",
+      "category": "Rain / Moody",
+      "expected_scene": "Rain falling on city street or window with water droplets and puddles",
+      "positive_prompt": "a rainy overcast day with wet pavement and raindrops",
+      "negative_prompt": "a dry arid desert under scorching sunshine"
+    },
+    {
+      "id": 11,
+      "filename_stem": "11_city_skyline_night",
+      "category": "City / Architecture",
+      "expected_scene": "Modern illuminated city skyline with skyscrapers at night",
+      "positive_prompt": "a modern illuminated city skyline with skyscrapers at night",
+      "negative_prompt": "cows grazing in a quiet green rural pasture"
+    },
+    {
+      "id": 12,
+      "filename_stem": "12_coffee_cafe",
+      "category": "Cafe / Lifestyle",
+      "expected_scene": "Cup of coffee with latte art in a cozy cafe setting",
+      "positive_prompt": "a cup of coffee with latte art on a wooden cafe table",
+      "negative_prompt": "a sports car speeding on a racetrack"
+    },
+    {
+      "id": 13,
+      "filename_stem": "13_dog_playing",
+      "category": "Pets / Dog",
+      "expected_scene": "Happy dog playing or running outdoors on green grass",
+      "positive_prompt": "a playful dog running outdoors on green grass",
+      "negative_prompt": "a sleeping cat curled up indoors on a couch"
+    },
+    {
+      "id": 14,
+      "filename_stem": "14_cat_sleeping",
+      "category": "Pets / Cat",
+      "expected_scene": "Cute cat sleeping or resting comfortably indoors",
+      "positive_prompt": "a cute cat sleeping curled up indoors",
+      "negative_prompt": "a large commercial airplane flying in the sky"
+    },
+    {
+      "id": 15,
+      "filename_stem": "15_hiking_trail",
+      "category": "Adventure / Hiking",
+      "expected_scene": "Person hiking with backpack along a scenic mountain trail",
+      "positive_prompt": "a hiker with a backpack walking along a scenic mountain trail",
+      "negative_prompt": "a person sitting at an office desk typing on a laptop"
+    },
+    {
+      "id": 16,
+      "filename_stem": "16_cycling_road",
+      "category": "Sports / Cycling",
+      "expected_scene": "Cyclist riding a bicycle along an open road",
+      "positive_prompt": "a cyclist riding a bicycle on a paved scenic road",
+      "negative_prompt": "swimmers doing laps in an indoor swimming pool"
+    },
+    {
+      "id": 17,
+      "filename_stem": "17_pizza_food",
+      "category": "Food / Pizza",
+      "expected_scene": "Freshly baked pizza with melted cheese and toppings",
+      "positive_prompt": "a freshly baked delicious pizza with melted cheese",
+      "negative_prompt": "a bowl of fresh green vegetable salad"
+    },
+    {
+      "id": 18,
+      "filename_stem": "18_breakfast_morning",
+      "category": "Food / Breakfast",
+      "expected_scene": "Morning breakfast spread with croissant, pastries, fruit, and orange juice",
+      "positive_prompt": "a morning breakfast table with croissants fruit and juice",
+      "negative_prompt": "a barbecue grill with smoking steaks and sausages"
+    },
+    {
+      "id": 19,
+      "filename_stem": "19_concert_crowd",
+      "category": "Entertainment / Concert",
+      "expected_scene": "Live music concert or festival with stage lights and audience crowd",
+      "positive_prompt": "a live concert stage with bright lights and a cheering crowd",
+      "negative_prompt": "a quiet university library with empty study desks"
+    },
+    {
+      "id": 20,
+      "filename_stem": "20_snow_skiing",
+      "category": "Winter / Skiing",
+      "expected_scene": "Person skiing or snowboarding down a snowy slope in winter",
+      "positive_prompt": "a person skiing down a snowy mountain slope in winter",
+      "negative_prompt": "people sunbathing on a hot tropical sandy beach"
+    }
+  ]
+}

@@ -109,7 +109,12 @@ class MLXEmbedder(EmbedderInterface):
         return res / norms
 
     def embed_text(self, text: str) -> np.ndarray:
-        inputs = self.processor(text=[text], return_tensors="pt", padding=True)
+        # Prompt normalization for vision-language alignment
+        prompt = text.strip()
+        if not (prompt.startswith("a photo of") or prompt.startswith("a picture of") or prompt.startswith("a video of")):
+            prompt = f"a photo of {prompt}"
+
+        inputs = self.processor(text=[prompt], padding="max_length", max_length=64, return_tensors="pt")
         with torch.inference_mode():
             emb = self.pt_model.get_text_features(**inputs)
             vec = emb.pooler_output if hasattr(emb, "pooler_output") else (emb[0] if isinstance(emb, (tuple, list)) else emb)
@@ -165,7 +170,11 @@ class PyTorchMPSEmbedder(EmbedderInterface):
         return vec.cpu().numpy().astype(np.float32)
 
     def embed_text(self, text: str) -> np.ndarray:
-        inputs = self.processor(text=[text], return_tensors="pt", padding=True).to(self.device)
+        prompt = text.strip()
+        if not (prompt.startswith("a photo of") or prompt.startswith("a picture of") or prompt.startswith("a video of")):
+            prompt = f"a photo of {prompt}"
+
+        inputs = self.processor(text=[prompt], padding="max_length", max_length=64, return_tensors="pt").to(self.device)
         with torch.inference_mode():
             emb = self.model.get_text_features(**inputs)
             vec = emb.pooler_output if hasattr(emb, "pooler_output") else (emb[0] if isinstance(emb, (tuple, list)) else emb)
