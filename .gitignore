@@ -1,0 +1,42 @@
+# ── Python ──
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# ── Runtime data (large, machine-specific) ──
+data/
+models/
+exports/
+
+# ── Keep directory structure with .gitkeep ──
+!data/.gitkeep
+!models/.gitkeep
+!exports/.gitkeep
+
+# ── Environment ──
+.env
+
+# ── IDE ──
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# ── macOS ──
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# ── Testing ──
+.coverage
+htmlcov/
+.pytest_cache/
+
+# ── Ruff ──
+.ruff_cache/
