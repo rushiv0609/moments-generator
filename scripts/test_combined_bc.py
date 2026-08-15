@@ -1,4 +1,4 @@
-"""Benchmark combined B+C: Apple Silicon Native ImageIO + Asynchronous Producer-Consumer Pipeline."""
+"""Benchmark combined B+C: Apple Silicon Native ImageIO + Asynchronous Producer-Consumer Pipeline with TQDM."""
 import time
 import queue
 import threading
@@ -9,6 +9,7 @@ import torch
 import Quartz
 from Foundation import NSURL
 from transformers import AutoModel, AutoProcessor
+from tqdm import tqdm
 
 def test_combined_pipeline(folder: str, count: int = 200, num_workers: int = 12):
     print("=" * 60)
@@ -34,7 +35,7 @@ def test_combined_pipeline(folder: str, count: int = 200, num_workers: int = 12)
         Quartz.kCGImageSourceShouldCache: False,
     }
 
-    SENTINEL = None
+    pbar_decode = tqdm(total=len(files), desc="📸 ImageIO Decoding", unit="img")
 
     def decode_worker(chunk):
         for f in chunk:
@@ -48,16 +49,15 @@ def test_combined_pipeline(folder: str, count: int = 200, num_workers: int = 12)
                         h = Quartz.CGImageGetHeight(cg_img)
                         dp = Quartz.CGImageGetDataProvider(cg_img)
                         data = Quartz.CGDataProviderCopyData(dp)
-                        # Fast raw memory buffer to PIL Image
                         img = Image.frombuffer("RGBA", (w, h), bytes(data), "raw", "RGBA", 0, 1).convert("RGB")
                         frame_queue.put(img)
-            except Exception as e:
+            except Exception:
                 pass
+            finally:
+                pbar_decode.update(1)
 
-    # Start timing
     t0 = time.perf_counter()
 
-    # Launch Producer Threads
     threads = []
     chunk_size = (len(files) + num_workers - 1) // num_workers
     for i in range(0, len(files), chunk_size):
@@ -66,45 +66,42 @@ def test_combined_pipeline(folder: str, count: int = 200, num_workers: int = 12)
         t.start()
         threads.append(t)
 
-    # Consumer Thread for GPU
-    processed_count = [0]
+    processed_count = 0
+    pbar_gpu = tqdm(total=len(files), desc="⚡ GPU Forward (MPS)", unit="img")
+    batch = []
 
-    def gpu_consumer():
-        batch = []
-        done_producers = False
-        while True:
-            try:
-                img = frame_queue.get(timeout=0.2)
-                batch.append(img)
-                if len(batch) >= 32:
-                    inputs = processor(images=batch, return_tensors="pt").to("mps")
-                    with torch.inference_mode():
-                        _ = model.get_image_features(**inputs)
-                    torch.mps.synchronize()
-                    processed_count[0] += len(batch)
-                    batch = []
-            except queue.Empty:
-                if all(not t.is_alive() for t in threads) and frame_queue.empty():
-                    break
-        
-        # Flush remainder
-        if batch:
-            inputs = processor(images=batch, return_tensors="pt").to("mps")
-            with torch.inference_mode():
-                _ = model.get_image_features(**inputs)
-            torch.mps.synchronize()
-            processed_count[0] += len(batch)
+    while True:
+        try:
+            img = frame_queue.get(timeout=0.1)
+            batch.append(img)
+            if len(batch) >= 32:
+                inputs = processor(images=batch, return_tensors="pt").to("mps")
+                with torch.inference_mode():
+                    _ = model.get_image_features(**inputs)
+                torch.mps.synchronize()
+                processed_count += len(batch)
+                pbar_gpu.update(len(batch))
+                batch = []
+        except queue.Empty:
+            if all(not t.is_alive() for t in threads) and frame_queue.empty():
+                break
 
-    consumer = threading.Thread(target=gpu_consumer)
-    consumer.start()
+    if batch:
+        inputs = processor(images=batch, return_tensors="pt").to("mps")
+        with torch.inference_mode():
+            _ = model.get_image_features(**inputs)
+        torch.mps.synchronize()
+        processed_count += len(batch)
+        pbar_gpu.update(len(batch))
 
     for t in threads:
         t.join()
-    consumer.join()
+    pbar_decode.close()
+    pbar_gpu.close()
 
     total_time = time.perf_counter() - t0
-    total_imgs = processed_count[0]
-    fps = total_imgs / total_time
+    total_imgs = processed_count
+    fps = total_imgs / total_time if total_time > 0 else 0
 
     print(f"\n✓ Successfully processed {total_imgs} HEIC images in {total_time:.2f} seconds")
     print(f"⚡ Throughput: {fps:.1f} images/second (vs 10.0-13.4 img/s previously)")
