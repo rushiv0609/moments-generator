@@ -36,7 +36,7 @@ class Settings(BaseSettings):
     VECTOR_QUEUE_SIZE: int = 512
 
     # Curation Parameters
-    MIN_SIMILARITY_THRESHOLD: float = 0.22
+    MIN_SIMILARITY_THRESHOLD: float = 0.05  # Lower threshold for high recall; Qdrant Top-K ranking handles precision
     MAX_OUTPUT_DURATION: int = 300  # 5 minutes
     DEFAULT_ASPECT_RATIO: str = "1:1"  # "1:1" | "16:9" | "9:16"
     IMAGE_DISPLAY_DURATION: float = 3.0  # seconds per photo

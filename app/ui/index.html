@@ -1,5 +1,6 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -7,9 +8,12 @@
     <!-- Modern Typography -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700&family=Plus+Jakarta+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <link
+        href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700&family=Plus+Jakarta+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap"
+        rel="stylesheet">
     <link rel="stylesheet" href="style.css">
 </head>
+
 <body>
     <div class="app-container">
         <!-- Top Navigation Bar -->
@@ -21,7 +25,7 @@
                     <span class="badge badge-accent">Apple Silicon M-Series</span>
                 </div>
             </div>
-            
+
             <div class="header-health" id="headerHealth">
                 <div class="health-pill" id="pillModel">
                     <span class="status-dot dot-loading"></span>
@@ -61,18 +65,23 @@
                             <h2>🎬 Generate Moments Video</h2>
                             <span class="badge badge-muted">Milestone 8 Preview</span>
                         </div>
-                        <p class="card-desc">Search your offline photo & video library using natural language semantics.</p>
+                        <p class="card-desc">Search your offline photo & video library using natural language semantics.
+                        </p>
 
                         <form id="jobForm" class="form-grid">
                             <div class="form-group">
                                 <label for="corpusPath">Corpus Folder Path</label>
-                                <input type="text" id="corpusPath" class="input-text" placeholder="/Users/username/Pictures/Holiday2025" value="/Users/rushivyas/Pictures/pin-bhabha/">
+                                <input type="text" id="corpusPath" class="input-text"
+                                    placeholder="/Users/username/Pictures/Holiday2025"
+                                    value="/Users/rushivyas/Pictures/pin-bhabha/">
                                 <span class="input-hint">Local directory containing HEIC, JPG, and MP4/MOV files.</span>
                             </div>
 
                             <div class="form-group">
                                 <label for="promptText">Semantic Search Prompt</label>
-                                <input type="text" id="promptText" class="input-text" placeholder="e.g. friends having dinner outdoors at sunset" value="friends having dinner outdoors on a summer evening">
+                                <input type="text" id="promptText" class="input-text"
+                                    placeholder="e.g. friends having dinner outdoors at sunset"
+                                    value="friends having dinner outdoors on a summer evening">
                             </div>
 
                             <div class="form-row">
@@ -112,15 +121,21 @@
                         </form>
 
                         <!-- Scan Results Box (Milestone 4) -->
-                        <div id="scanResultsBox" style="display: none; margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--border-color);">
-                            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+                        <div id="scanResultsBox"
+                            style="display: none; margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--border-color);">
+                            <div
+                                style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
                                 <h3 style="font-size: 14px; font-weight: 600;">📊 Scan Summary</h3>
                                 <span class="badge badge-success" id="scanBadge">Complete</span>
                             </div>
-                            <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; font-size: 12px; margin-bottom: 12px;" id="scanStatsGrid">
-                                <div class="step-card" style="padding: 8px;"><strong>Total:</strong> <span id="scanTotal">0</span></div>
-                                <div class="step-card" style="padding: 8px;"><strong>Photos:</strong> <span id="scanPhotos">0</span></div>
-                                <div class="step-card" style="padding: 8px;"><strong>Videos:</strong> <span id="scanVideos">0</span></div>
+                            <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; font-size: 12px; margin-bottom: 12px;"
+                                id="scanStatsGrid">
+                                <div class="step-card" style="padding: 8px;"><strong>Total:</strong> <span
+                                        id="scanTotal">0</span></div>
+                                <div class="step-card" style="padding: 8px;"><strong>Photos:</strong> <span
+                                        id="scanPhotos">0</span></div>
+                                <div class="step-card" style="padding: 8px;"><strong>Videos:</strong> <span
+                                        id="scanVideos">0</span></div>
                             </div>
                             <div class="table-responsive" style="max-height: 200px; overflow-y: auto;">
                                 <table class="data-table" style="font-size: 11px;">
@@ -149,7 +164,8 @@
                                 <div class="step-icon">📸</div>
                                 <div class="step-content">
                                     <h3>1. Hardware Decoders</h3>
-                                    <p>Apple ImageIO (Photos) & OpenCV VideoToolbox (Videos) running across 12 threads.</p>
+                                    <p>Apple ImageIO (Photos) & OpenCV VideoToolbox (Videos) running across 12 threads.
+                                    </p>
                                 </div>
                             </div>
                             <div class="step-arrow">⬇️</div>
@@ -182,10 +198,12 @@
                             <div>
                                 <h2>🧪 Live Semantic Similarity Playground</h2>
                                 <p class="card-desc" style="margin-top: 4px;">
-                                    Test custom photos and natural language queries in real-time using native Apple Silicon SigLIP 2 embeddings.
+                                    Test custom photos and natural language queries in real-time using native Apple
+                                    Silicon SigLIP 2 embeddings.
                                 </p>
                             </div>
-                            <button type="button" class="btn btn-secondary btn-sm" id="btnResetPlayground">🔄 Clear All</button>
+                            <button type="button" class="btn btn-secondary btn-sm" id="btnResetPlayground">🔄 Clear
+                                All</button>
                         </div>
                     </div>
 
@@ -199,23 +217,28 @@
                                     <h3 style="font-size: 16px; margin: 0;">Primary Input</h3>
                                 </div>
                                 <div class="toggle-group">
-                                    <button type="button" class="toggle-btn active" data-target="A" data-type="image">📸 Image</button>
-                                    <button type="button" class="toggle-btn" data-target="A" data-type="text">✍️ Text</button>
+                                    <button type="button" class="toggle-btn active" data-target="A" data-type="image">📸
+                                        Image</button>
+                                    <button type="button" class="toggle-btn" data-target="A" data-type="text">✍️
+                                        Text</button>
                                 </div>
                             </div>
 
                             <!-- Target A Image Dropzone -->
                             <div class="dropzone-container" id="dropzoneA">
-                                <input type="file" id="fileInputA" accept="image/*,.heic,.jpg,.jpeg,.png,.webp,.avif" style="display: none;">
+                                <input type="file" id="fileInputA" accept="image/*,.heic,.jpg,.jpeg,.png,.webp,.avif"
+                                    style="display: none;">
                                 <div class="dropzone" id="dropAreaA" tabindex="0">
                                     <div class="dropzone-placeholder" id="placeholderA">
                                         <div class="dropzone-icon">🖼️</div>
                                         <p class="dropzone-text"><strong>Drag & Drop</strong> image here</p>
-                                        <p class="dropzone-subtext">or click to browse • or press <kbd>⌘V</kbd> to paste screenshot</p>
+                                        <p class="dropzone-subtext">or click to browse • or press <kbd>⌘V</kbd> to paste
+                                            screenshot</p>
                                     </div>
                                     <div class="dropzone-preview" id="previewContainerA" style="display: none;">
                                         <img id="previewImgA" src="" alt="Target A Preview">
-                                        <button type="button" class="btn-clear-preview" id="btnClearImgA" title="Remove image">✕</button>
+                                        <button type="button" class="btn-clear-preview" id="btnClearImgA"
+                                            title="Remove image">✕</button>
                                         <div class="preview-meta" id="previewMetaA">--</div>
                                     </div>
                                 </div>
@@ -223,8 +246,11 @@
 
                             <!-- Target A Text Area -->
                             <div class="text-input-container" id="textContainerA" style="display: none;">
-                                <label for="textInputA" style="font-size: 13px; font-weight: 500; margin-bottom: 6px; display: block;">Text Prompt</label>
-                                <textarea id="textInputA" class="input-textarea" rows="4" placeholder="e.g. a snowy mountain peak summit on a sunny day"></textarea>
+                                <label for="textInputA"
+                                    style="font-size: 13px; font-weight: 500; margin-bottom: 6px; display: block;">Text
+                                    Prompt</label>
+                                <textarea id="textInputA" class="input-textarea" rows="4"
+                                    placeholder="e.g. a snowy mountain peak summit on a sunny day"></textarea>
                                 <div class="quick-chips">
                                     <span class="chip" data-target="A">🏔️ snowy mountain</span>
                                     <span class="chip" data-target="A">🏖️ tropical beach</span>
@@ -242,23 +268,28 @@
                                     <h3 style="font-size: 16px; margin: 0;">Comparison Target</h3>
                                 </div>
                                 <div class="toggle-group">
-                                    <button type="button" class="toggle-btn" data-target="B" data-type="image">📸 Image</button>
-                                    <button type="button" class="toggle-btn active" data-target="B" data-type="text">✍️ Text</button>
+                                    <button type="button" class="toggle-btn" data-target="B" data-type="image">📸
+                                        Image</button>
+                                    <button type="button" class="toggle-btn active" data-target="B" data-type="text">✍️
+                                        Text</button>
                                 </div>
                             </div>
 
                             <!-- Target B Image Dropzone -->
                             <div class="dropzone-container" id="dropzoneB" style="display: none;">
-                                <input type="file" id="fileInputB" accept="image/*,.heic,.jpg,.jpeg,.png,.webp,.avif" style="display: none;">
+                                <input type="file" id="fileInputB" accept="image/*,.heic,.jpg,.jpeg,.png,.webp,.avif"
+                                    style="display: none;">
                                 <div class="dropzone" id="dropAreaB" tabindex="0">
                                     <div class="dropzone-placeholder" id="placeholderB">
                                         <div class="dropzone-icon">🖼️</div>
                                         <p class="dropzone-text"><strong>Drag & Drop</strong> image here</p>
-                                        <p class="dropzone-subtext">or click to browse • or press <kbd>⌘V</kbd> to paste screenshot</p>
+                                        <p class="dropzone-subtext">or click to browse • or press <kbd>⌘V</kbd> to paste
+                                            screenshot</p>
                                     </div>
                                     <div class="dropzone-preview" id="previewContainerB" style="display: none;">
                                         <img id="previewImgB" src="" alt="Target B Preview">
-                                        <button type="button" class="btn-clear-preview" id="btnClearImgB" title="Remove image">✕</button>
+                                        <button type="button" class="btn-clear-preview" id="btnClearImgB"
+                                            title="Remove image">✕</button>
                                         <div class="preview-meta" id="previewMetaB">--</div>
                                     </div>
                                 </div>
@@ -266,8 +297,11 @@
 
                             <!-- Target B Text Area -->
                             <div class="text-input-container" id="textContainerB">
-                                <label for="textInputB" style="font-size: 13px; font-weight: 500; margin-bottom: 6px; display: block;">Text Prompt</label>
-                                <textarea id="textInputB" class="input-textarea" rows="4" placeholder="e.g. a snowy mountain peak summit with blue sky"></textarea>
+                                <label for="textInputB"
+                                    style="font-size: 13px; font-weight: 500; margin-bottom: 6px; display: block;">Text
+                                    Prompt</label>
+                                <textarea id="textInputB" class="input-textarea" rows="4"
+                                    placeholder="e.g. a snowy mountain peak summit with blue sky"></textarea>
                                 <div class="quick-chips">
                                     <span class="chip" data-target="B">🏔️ snowy mountain</span>
                                     <span class="chip" data-target="B">🏖️ sunny beach</span>
@@ -281,13 +315,15 @@
 
                     <!-- Action Bar -->
                     <div style="display: flex; justify-content: center; margin-bottom: 24px;">
-                        <button type="button" class="btn btn-primary btn-lg" id="btnCalculateSimilarity" style="min-width: 280px; font-size: 16px; padding: 14px 28px;">
+                        <button type="button" class="btn btn-primary btn-lg" id="btnCalculateSimilarity"
+                            style="min-width: 280px; font-size: 16px; padding: 14px 28px;">
                             ⚡ Calculate Semantic Similarity
                         </button>
                     </div>
 
                     <!-- Results Section -->
-                    <div class="card glass-card result-panel" id="resultPanel" style="display: none; margin-bottom: 24px;">
+                    <div class="card glass-card result-panel" id="resultPanel"
+                        style="display: none; margin-bottom: 24px;">
                         <div class="card-header">
                             <h2>📊 Semantic Alignment Result</h2>
                             <span class="badge" id="resultStatusBadge">Calculating...</span>
@@ -303,7 +339,8 @@
 
                             <!-- Visual Alignment Gauge Bar -->
                             <div class="result-gauge-card">
-                                <div style="display: flex; justify-content: space-between; font-size: 12px; margin-bottom: 6px;">
+                                <div
+                                    style="display: flex; justify-content: space-between; font-size: 12px; margin-bottom: 6px;">
                                     <span style="color: var(--text-muted);">-0.10 (Mismatch)</span>
                                     <span style="color: var(--text-muted);">0.00 (Neutral)</span>
                                     <span style="color: #10b981; font-weight: 600;">+0.15 (Strong Match)</span>
@@ -312,8 +349,10 @@
                                     <div class="gauge-center-mark"></div>
                                     <div class="gauge-bar-fill" id="gaugeBarFill" style="width: 50%; left: 50%;"></div>
                                 </div>
-                                <div class="gauge-details" id="gaugeDetails" style="font-size: 12px; color: var(--text-muted); margin-top: 10px;">
-                                    Latency: <span id="calcLatency">-- ms</span> • Backend: <span id="calcBackend">Apple MLX</span> • Dimensions: 768-dim L2 Unit Vector
+                                <div class="gauge-details" id="gaugeDetails"
+                                    style="font-size: 12px; color: var(--text-muted); margin-top: 10px;">
+                                    Latency: <span id="calcLatency">-- ms</span> • Backend: <span id="calcBackend">Apple
+                                        MLX</span> • Dimensions: 768-dim L2 Unit Vector
                                 </div>
                             </div>
                         </div>
@@ -326,20 +365,27 @@
                         </div>
                         <div style="font-size: 13px; line-height: 1.6; color: var(--text-muted);">
                             <p style="margin-bottom: 8px;">
-                                <strong>Algorithm:</strong> Cosine Similarity between two 768-dimensional L2-normalized float32 vectors: <code>similarity = Vector_A • Vector_B</code>.
+                                <strong>Algorithm:</strong> Cosine Similarity between two 768-dimensional L2-normalized
+                                float32 vectors: <code>similarity = Vector_A • Vector_B</code>.
                             </p>
-                            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; margin-top: 10px;">
-                                <div style="background: rgba(16, 185, 129, 0.1); border: 1px solid rgba(16, 185, 129, 0.25); border-radius: 8px; padding: 10px;">
+                            <div
+                                style="display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; margin-top: 10px;">
+                                <div
+                                    style="background: rgba(16, 185, 129, 0.1); border: 1px solid rgba(16, 185, 129, 0.25); border-radius: 8px; padding: 10px;">
                                     <strong style="color: #10b981;">🟢 Strong Match (+0.08 to +0.20+)</strong>
-                                    <p style="font-size: 12px; margin-top: 4px; color: var(--text-color);">Clear semantic alignment. The image content strongly reflects the prompt concept.</p>
+                                    <p style="font-size: 12px; margin-top: 4px; color: var(--text-color);">High likelihood to rank at the top. The image content strongly reflects the prompt concept.</p>
                                 </div>
-                                <div style="background: rgba(245, 158, 11, 0.1); border: 1px solid rgba(245, 158, 11, 0.25); border-radius: 8px; padding: 10px;">
+                                <div
+                                    style="background: rgba(245, 158, 11, 0.1); border: 1px solid rgba(245, 158, 11, 0.25); border-radius: 8px; padding: 10px;">
                                     <strong style="color: #f59e0b;">🟡 Moderate / Context (+0.03 to +0.08)</strong>
-                                    <p style="font-size: 12px; margin-top: 4px; color: var(--text-color);">Weak or partial match (e.g., outdoor landscape vs. specific hiking activity).</p>
+                                    <p style="font-size: 12px; margin-top: 4px; color: var(--text-color);">Weak or
+                                        partial match (e.g., outdoor landscape vs. specific hiking activity). Good for broad recall.</p>
                                 </div>
-                                <div style="background: rgba(239, 68, 68, 0.1); border: 1px solid rgba(239, 68, 68, 0.25); border-radius: 8px; padding: 10px;">
+                                <div
+                                    style="background: rgba(239, 68, 68, 0.1); border: 1px solid rgba(239, 68, 68, 0.25); border-radius: 8px; padding: 10px;">
                                     <strong style="color: #ef4444;">🔴 Distractor / Negative (&lt; 0.00)</strong>
-                                    <p style="font-size: 12px; margin-top: 4px; color: var(--text-color);">Semantic contradiction or unrelated concepts (e.g. snowy mountains vs. beach).</p>
+                                    <p style="font-size: 12px; margin-top: 4px; color: var(--text-color);">Semantic
+                                        contradiction or unrelated concepts.</p>
                                 </div>
                             </div>
                         </div>
@@ -405,7 +451,9 @@
                                 </tr>
                             </thead>
                             <tbody id="configTableBody">
-                                <tr><td colspan="3" class="text-center">Loading configuration...</td></tr>
+                                <tr>
+                                    <td colspan="3" class="text-center">Loading configuration...</td>
+                                </tr>
                             </tbody>
                         </table>
                     </div>
@@ -431,7 +479,9 @@
                                 </tr>
                             </thead>
                             <tbody id="dataTableBody">
-                                <tr><td colspan="4" class="text-center">Scanning directory...</td></tr>
+                                <tr>
+                                    <td colspan="4" class="text-center">Scanning directory...</td>
+                                </tr>
                             </tbody>
                         </table>
                     </div>
@@ -454,4 +504,5 @@
 
     <script src="app.js"></script>
 </body>
+
 </html>

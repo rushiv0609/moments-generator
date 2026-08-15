@@ -684,14 +684,15 @@ async function calculateSimilarity() {
         const clamped = Math.max(minScale, Math.min(maxScale, sim));
         const pct = ((clamped - minScale) / (maxScale - minScale)) * 100;
 
+        const zeroPct = ((0 - minScale) / (maxScale - minScale)) * 100;
+
         if (sim >= 0) {
-            const startPct = 50;
-            gaugeFill.style.left = `${startPct}%`;
-            gaugeFill.style.width = `${Math.max(2, pct - startPct)}%`;
+            gaugeFill.style.left = `${zeroPct}%`;
+            gaugeFill.style.width = `${Math.max(2, pct - zeroPct)}%`;
             gaugeFill.style.background = sim >= 0.08 ? "#10b981" : "#f59e0b";
         } else {
             gaugeFill.style.left = `${pct}%`;
-            gaugeFill.style.width = `${50 - pct}%`;
+            gaugeFill.style.width = `${zeroPct - pct}%`;
             gaugeFill.style.background = "#ef4444";
         }
     } catch (err) {
