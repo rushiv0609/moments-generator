@@ -2,6 +2,8 @@
 Unit and integration tests for API endpoints.
 """
 
+from pathlib import Path
+from PIL import Image
 import pytest
 from fastapi.testclient import TestClient
 from app.main import app
@@ -47,6 +49,23 @@ def test_debug_data_endpoint():
     assert "data_dir" in data
     assert "items" in data
     assert isinstance(data["items"], list)
+
+
+def test_scan_api_endpoint(tmp_path):
+    """Verify POST /api/v1/scan triggers directory scan and returns summary."""
+    corpus = tmp_path / "api_corpus"
+    corpus.mkdir()
+    img = Image.new("RGB", (100, 100), color="yellow")
+    img.save(corpus / "sample.jpg")
+
+    response = client.post("/api/v1/scan", json={"corpus_path": str(corpus)})
+    assert response.status_code == 200
+    data = response.json()
+    assert data["total_found"] == 1
+    assert data["images_count"] == 1
+    assert data["videos_count"] == 0
+    assert len(data["files"]) == 1
+    assert data["files"][0]["file_type"] == "image"
 
 
 def test_job_stubs_return_501():

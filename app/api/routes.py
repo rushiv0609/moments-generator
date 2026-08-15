@@ -22,7 +22,11 @@ from app.api.schemas import (
     DataDirItem,
     GenerateRequest,
     JobResponse,
+    ScanRequest,
+    ScanResponse,
+    ScannedFileItem,
 )
+from app.db.manifest import ManifestDB
 
 router = APIRouter()
 
@@ -188,6 +192,55 @@ def get_debug_data() -> DataDirResponse:
         data_dir=str(data_path.resolve()),
         items=items,
     )
+
+
+# =========================================================================
+# Milestone 4: Corpus Scanner & Metadata Extraction
+# =========================================================================
+
+@router.post("/scan", response_model=ScanResponse)
+def scan_media_corpus(request: ScanRequest) -> ScanResponse:
+    """
+    Recursively scan a media directory, extract EXIF/container metadata,
+    compute two-tier hashes, and sync state with SQLite manifest.
+    """
+    settings = get_settings()
+    try:
+        manifest = ManifestDB.open_or_create(request.corpus_path, data_dir=settings.DATA_DIR)
+        from app.core.scanner import scan_corpus
+        summary = scan_corpus(request.corpus_path, manifest, force_reindex=request.force_reindex)
+
+        items = [
+            ScannedFileItem(
+                id=f.id,
+                file_path=f.file_path,
+                file_type=f.file_type,
+                mime_type=f.mime_type,
+                file_size=f.file_size,
+                status=f.status.value,
+                creation_timestamp=f.creation_timestamp,
+                timestamp_source=f.timestamp_source,
+                duration_seconds=f.duration_seconds,
+            )
+            for f in summary.all_files
+        ]
+
+        return ScanResponse(
+            corpus_path=summary.corpus_path,
+            total_found=summary.total_found,
+            new_files=summary.new_files,
+            modified_files=summary.modified_files,
+            skipped_files=summary.skipped_files,
+            dedup_reused_files=summary.dedup_reused_files,
+            deleted_files=summary.deleted_files,
+            images_count=summary.images_count,
+            videos_count=summary.videos_count,
+            files=items,
+        )
+    except ValueError as ve:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(ve))
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Scanning failed: {str(e)}")
 
 
 # =========================================================================

@@ -21,11 +21,90 @@ document.addEventListener("DOMContentLoaded", () => {
         filterConfigTable(e.target.value);
     });
 
+    const btnScan = document.getElementById("btnScanCorpus");
+    if (btnScan) {
+        btnScan.addEventListener("click", () => {
+            scanCorpusUI();
+        });
+    }
+
     // Auto-refresh health every 15 seconds
     setInterval(() => {
         fetchHealth(false);
     }, 15000);
 });
+
+/**
+ * Scan Corpus UI Handler (Milestone 4)
+ */
+async function scanCorpusUI() {
+    const corpusPath = document.getElementById("corpusPath").value.trim();
+    const forceReindex = document.getElementById("forceReindex").checked;
+    const btnScan = document.getElementById("btnScanCorpus");
+    const resultsBox = document.getElementById("scanResultsBox");
+    const tbody = document.getElementById("scanTableBody");
+
+    if (!corpusPath) {
+        alert("Please specify a corpus directory path.");
+        return;
+    }
+
+    btnScan.disabled = true;
+    btnScan.textContent = "⏳ Scanning Corpus...";
+    resultsBox.style.display = "block";
+    tbody.innerHTML = `<tr><td colspan="4" class="text-center">Traversing directory and extracting EXIF/container metadata...</td></tr>`;
+
+    try {
+        const res = await fetch("/api/v1/scan", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ corpus_path: corpusPath, force_reindex: forceReindex }),
+        });
+
+        if (!res.ok) {
+            const err = await res.json();
+            throw new Error(err.detail || `HTTP ${res.status}`);
+        }
+
+        const data = await res.json();
+        document.getElementById("scanTotal").textContent = data.total_found;
+        document.getElementById("scanPhotos").textContent = `${data.images_count} photos`;
+        document.getElementById("scanVideos").textContent = `${data.videos_count} clips`;
+
+        tbody.innerHTML = "";
+        if (!data.files || data.files.length === 0) {
+            tbody.innerHTML = `<tr><td colspan="4" class="text-center" style="color: var(--text-muted)">No supported media files found in directory.</td></tr>`;
+        } else {
+            data.files.slice(0, 100).forEach(f => {
+                const tr = document.createElement("tr");
+                const icon = f.file_type === "image" ? "📸" : "🎬";
+                const filename = f.file_path.split("/").pop();
+                let dateStr = "-";
+                if (f.creation_timestamp) {
+                    dateStr = new Date(f.creation_timestamp * 1000).toISOString().replace("T", " ").split(".")[0];
+                }
+                tr.innerHTML = `
+                    <td>${icon} ${f.file_type.toUpperCase()}</td>
+                    <td title="${f.file_path}"><code>${filename}</code></td>
+                    <td>${dateStr} <small style="color: var(--text-muted)">(${f.timestamp_source || 'fs'})</small></td>
+                    <td><span class="badge badge-accent">${f.status}</span></td>
+                `;
+                tbody.appendChild(tr);
+            });
+            if (data.files.length > 100) {
+                const trMore = document.createElement("tr");
+                trMore.innerHTML = `<td colspan="4" class="text-center" style="color: var(--text-muted)">... and ${data.files.length - 100} more files</td>`;
+                tbody.appendChild(trMore);
+            }
+        }
+        fetchDataDir();
+    } catch (err) {
+        tbody.innerHTML = `<tr><td colspan="4" class="text-center" style="color: var(--danger)">Scan failed: ${err.message}</td></tr>`;
+    } finally {
+        btnScan.disabled = false;
+        btnScan.textContent = "🔍 Scan Corpus (Milestone 4)";
+    }
+}
 
 /**
  * Tab Navigation

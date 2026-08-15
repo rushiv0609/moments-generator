@@ -49,6 +49,36 @@ class DataDirResponse(BaseModel):
     items: List[DataDirItem]
 
 
+class ScanRequest(BaseModel):
+    corpus_path: str = Field(..., description="Absolute path to media folder to scan")
+    force_reindex: bool = Field(default=False, description="Whether to bypass fast hash cache")
+
+
+class ScannedFileItem(BaseModel):
+    id: Optional[int]
+    file_path: str
+    file_type: str
+    mime_type: Optional[str]
+    file_size: int
+    status: str
+    creation_timestamp: Optional[float]
+    timestamp_source: Optional[str]
+    duration_seconds: Optional[float]
+
+
+class ScanResponse(BaseModel):
+    corpus_path: str
+    total_found: int
+    new_files: int
+    modified_files: int
+    skipped_files: int
+    dedup_reused_files: int
+    deleted_files: int
+    images_count: int
+    videos_count: int
+    files: List[ScannedFileItem]
+
+
 class GenerateRequest(BaseModel):
     corpus_path: str = Field(..., description="Absolute path to media folder on the local machine")
     prompt: str = Field(..., min_length=1, description="Natural language search prompt describing the moment")

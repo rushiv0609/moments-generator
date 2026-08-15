@@ -100,12 +100,41 @@
                                 <label for="forceReindex">Bypass manifest checkpoint and force re-embedding</label>
                             </div>
 
-                            <div class="form-actions">
+                            <div class="form-actions" style="display: flex; gap: 10px; flex-wrap: wrap;">
+                                <button type="button" class="btn btn-secondary" id="btnScanCorpus">
+                                    🔍 Scan Corpus (Milestone 4)
+                                </button>
                                 <button type="button" class="btn btn-primary" id="btnSubmitJob" disabled>
                                     ⚡ Generate Moments (Activates in M8)
                                 </button>
                             </div>
                         </form>
+
+                        <!-- Scan Results Box (Milestone 4) -->
+                        <div id="scanResultsBox" style="display: none; margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--border-color);">
+                            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+                                <h3 style="font-size: 14px; font-weight: 600;">📊 Scan Summary</h3>
+                                <span class="badge badge-success" id="scanBadge">Complete</span>
+                            </div>
+                            <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; font-size: 12px; margin-bottom: 12px;" id="scanStatsGrid">
+                                <div class="step-card" style="padding: 8px;"><strong>Total:</strong> <span id="scanTotal">0</span></div>
+                                <div class="step-card" style="padding: 8px;"><strong>Photos:</strong> <span id="scanPhotos">0</span></div>
+                                <div class="step-card" style="padding: 8px;"><strong>Videos:</strong> <span id="scanVideos">0</span></div>
+                            </div>
+                            <div class="table-responsive" style="max-height: 200px; overflow-y: auto;">
+                                <table class="data-table" style="font-size: 11px;">
+                                    <thead>
+                                        <tr>
+                                            <th>Type</th>
+                                            <th>File</th>
+                                            <th>EXIF / Created</th>
+                                            <th>Status</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="scanTableBody"></tbody>
+                                </table>
+                            </div>
+                        </div>
                     </div>
 
                     <!-- Architecture Overview Card -->
