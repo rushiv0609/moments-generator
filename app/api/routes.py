@@ -29,6 +29,7 @@ from app.api.schemas import (
     ScannedFileItem,
 )
 from app.db.manifest import ManifestDB
+from app.db.qdrant import QdrantVectorDB
 from app.core.embedder import create_embedder, EmbedderInterface
 from app.core.extractor import decode_image
 
@@ -69,18 +70,19 @@ def check_ffmpeg() -> ComponentStatus:
 
 
 def check_qdrant() -> QdrantStatus:
-    """Check connectivity to Qdrant vector database."""
+    """Check connectivity to Qdrant vector database (Remote or Embedded)."""
     settings = get_settings()
     try:
-        client = QdrantClient(host=settings.QDRANT_HOST, port=settings.QDRANT_PORT, timeout=2.0)
-        collections = client.get_collections()
+        qdrant_db = QdrantVectorDB.create(settings=settings)
+        collections = qdrant_db.client.get_collections()
         count = len(collections.collections)
+        mode_str = "Remote Docker" if qdrant_db.mode == "remote" else "Embedded Disk Engine"
         return QdrantStatus(
             connected=True,
-            host=settings.QDRANT_HOST,
-            port=settings.QDRANT_PORT,
+            host=settings.QDRANT_HOST if qdrant_db.mode == "remote" else "local",
+            port=settings.QDRANT_PORT if qdrant_db.mode == "remote" else 0,
             collections=count,
-            details="Connected successfully",
+            details=f"Connected successfully ({mode_str})",
         )
     except Exception as e:
         return QdrantStatus(
@@ -88,8 +90,9 @@ def check_qdrant() -> QdrantStatus:
             host=settings.QDRANT_HOST,
             port=settings.QDRANT_PORT,
             collections=0,
-            details=f"Cannot reach Qdrant server: {str(e)}",
+            details=f"Cannot initialize Qdrant: {str(e)}",
         )
+
 
 
 def check_model_backend() -> ModelStatus:
