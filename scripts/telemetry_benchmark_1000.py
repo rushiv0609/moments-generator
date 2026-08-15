@@ -4,20 +4,28 @@ Measures exact time spent in:
 2. Transformation on CPU vs Transformation on GPU (MPS)
 3. GPU Neural Network Forward Pass (SigLIP 2 Vision Tower)
 4. Vector L2 Normalization
+
+Outputs formatted table and saves report file to data/benchmarks/.
 """
 import os
 import sys
 import time
 import queue
 import threading
+import argparse
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
 from PIL import Image
 import numpy as np
 import torch
-import torchvision.transforms.v2 as T
 import Quartz
 from Foundation import NSURL
 from transformers import AutoModel, AutoProcessor
+
+from telemetry_utils import get_current_ram_mb, get_mps_ram_mb, save_benchmark_report
 
 def load_files(folder_path: str, count: int = 1000):
     root = Path(folder_path)
@@ -41,7 +49,6 @@ def run_approach_1_cpu_transform(files, model, processor, batch_size=64, num_wor
         Quartz.kCGImageSourceShouldCache: False,
     }
 
-    # Thread-safe telemetry accumulators
     t_decompress_total = [0.0]
     t_cpu_transform_total = [0.0]
     t_gpu_nn_total = [0.0]
@@ -93,12 +100,10 @@ def run_approach_1_cpu_transform(files, model, processor, batch_size=64, num_wor
                 img = frame_queue.get(timeout=0.2)
                 batch.append(img)
                 if len(batch) >= batch_size:
-                    # CPU Transform
                     t_tx0 = time.perf_counter()
                     inputs = processor(images=batch, return_tensors="pt").to("mps")
                     t_cpu_transform_total[0] += (time.perf_counter() - t_tx0)
 
-                    # GPU Forward Pass
                     t_nn0 = time.perf_counter()
                     with torch.inference_mode():
                         features = model.get_image_features(**inputs)
@@ -113,7 +118,6 @@ def run_approach_1_cpu_transform(files, model, processor, batch_size=64, num_wor
                     torch.mps.synchronize()
                     t_gpu_nn_total[0] += (time.perf_counter() - t_nn0)
 
-                    # GPU Norm
                     t_norm0 = time.perf_counter()
                     with torch.inference_mode():
                         _ = emb / emb.norm(dim=-1, keepdim=True)
@@ -153,22 +157,23 @@ def run_approach_1_cpu_transform(files, model, processor, batch_size=64, num_wor
     consumer.join()
 
     t_wall_total = time.perf_counter() - t_wall_start
-    rss_mb = os.popen(f"ps -o rss= -p {os.getpid()}").read().strip()
+    ram_mb = get_current_ram_mb()
 
     return {
-        "wall_time": t_wall_total,
-        "processed": processed_count[0],
-        "fps": processed_count[0] / t_wall_total,
-        "cpu_decompress_sum": t_decompress_total[0],
-        "cpu_decompress_eff": t_decompress_total[0] / num_workers,
-        "transform_time": t_cpu_transform_total[0],
-        "gpu_nn_time": t_gpu_nn_total[0],
-        "gpu_norm_time": t_gpu_norm_total[0],
-        "ram_mb": int(rss_mb) // 1024 if rss_mb else 0,
+        "approach": "CPU Transformation (AutoProcessor)",
+        "wall_time_sec": round(t_wall_total, 2),
+        "processed_count": processed_count[0],
+        "throughput_fps": round(processed_count[0] / t_wall_total, 1),
+        "cpu_decompress_sum_sec": round(t_decompress_total[0], 2),
+        "cpu_decompress_effective_wall_sec": round(t_decompress_total[0] / num_workers, 2),
+        "transform_time_sec": round(t_cpu_transform_total[0], 2),
+        "gpu_nn_forward_time_sec": round(t_gpu_nn_total[0], 2),
+        "gpu_norm_time_sec": round(t_gpu_norm_total[0], 3),
+        "peak_ram_mb": round(ram_mb, 1),
     }
 
 # =========================================================================
-# APPROACH 2: GPU Transformation (Raw bytes/arrays -> Direct GPU MPS Transform)
+# APPROACH 2: GPU Transformation (Raw bytes -> Direct GPU MPS Transform)
 # =========================================================================
 def run_approach_2_gpu_transform(files, model, batch_size=64, num_workers=12):
     print("\n" + "=" * 75)
@@ -183,8 +188,6 @@ def run_approach_2_gpu_transform(files, model, batch_size=64, num_workers=12):
         Quartz.kCGImageSourceShouldCache: False,
     }
 
-    # GPU Transform pipeline: Resize/pad to 224x224, convert to float16 and SigLIP normalize on GPU
-    # SigLIP normalizer: (x / 255.0 - 0.5) / 0.5  =>  x * (2.0 / 255.0) - 1.0
     MEAN = torch.tensor([0.5, 0.5, 0.5], device="mps", dtype=torch.float16).view(1, 3, 1, 1)
     STD = torch.tensor([0.5, 0.5, 0.5], device="mps", dtype=torch.float16).view(1, 3, 1, 1)
 
@@ -208,7 +211,6 @@ def run_approach_2_gpu_transform(files, model, batch_size=64, num_workers=12):
                         h = Quartz.CGImageGetHeight(cg_img)
                         dp = Quartz.CGImageGetDataProvider(cg_img)
                         data = Quartz.CGDataProviderCopyData(dp)
-                        # Extract raw RGBA bytes as uint8 numpy array (very fast C copy)
                         arr = np.frombuffer(bytes(data), dtype=np.uint8).reshape((h, w, 4))[:, :, :3]
                         local_decomp += (time.perf_counter() - t0)
                         frame_queue.put(arr)
@@ -238,9 +240,7 @@ def run_approach_2_gpu_transform(files, model, batch_size=64, num_workers=12):
         while True:
             try:
                 arr = frame_queue.get(timeout=0.2)
-                # Ensure 224x224
                 if arr.shape[0] != 224 or arr.shape[1] != 224:
-                    # Pad or crop if needed
                     pad_h = max(0, 224 - arr.shape[0])
                     pad_w = max(0, 224 - arr.shape[1])
                     if pad_h > 0 or pad_w > 0:
@@ -249,17 +249,13 @@ def run_approach_2_gpu_transform(files, model, batch_size=64, num_workers=12):
                 batch_arrays.append(arr)
 
                 if len(batch_arrays) >= batch_size:
-                    # GPU Transform: Transfer uint8 batch directly to MPS GPU and run GPU shader transforms
                     t_tx0 = time.perf_counter()
-                    batch_np = np.stack(batch_arrays, axis=0) # (B, 224, 224, 3)
-                    # Convert to tensor (B, 3, 224, 224) and push to MPS
+                    batch_np = np.stack(batch_arrays, axis=0)
                     tensor_gpu = torch.from_numpy(batch_np).permute(0, 3, 1, 2).to("mps", non_blocking=True)
-                    # GPU float16 normalization in one vectorized Metal kernel
                     pixel_values = (tensor_gpu.to(torch.float16) / 255.0 - MEAN) / STD
                     torch.mps.synchronize()
                     t_gpu_transform_total[0] += (time.perf_counter() - t_tx0)
 
-                    # GPU Forward Pass
                     t_nn0 = time.perf_counter()
                     with torch.inference_mode():
                         features = model.get_image_features(pixel_values=pixel_values)
@@ -274,7 +270,6 @@ def run_approach_2_gpu_transform(files, model, batch_size=64, num_workers=12):
                     torch.mps.synchronize()
                     t_gpu_nn_total[0] += (time.perf_counter() - t_nn0)
 
-                    # GPU Norm
                     t_norm0 = time.perf_counter()
                     with torch.inference_mode():
                         _ = emb / emb.norm(dim=-1, keepdim=True)
@@ -317,56 +312,73 @@ def run_approach_2_gpu_transform(files, model, batch_size=64, num_workers=12):
     consumer.join()
 
     t_wall_total = time.perf_counter() - t_wall_start
-    rss_mb = os.popen(f"ps -o rss= -p {os.getpid()}").read().strip()
+    ram_mb = get_current_ram_mb()
 
     return {
-        "wall_time": t_wall_total,
-        "processed": processed_count[0],
-        "fps": processed_count[0] / t_wall_total,
-        "cpu_decompress_sum": t_decompress_total[0],
-        "cpu_decompress_eff": t_decompress_total[0] / num_workers,
-        "transform_time": t_gpu_transform_total[0],
-        "gpu_nn_time": t_gpu_nn_total[0],
-        "gpu_norm_time": t_gpu_norm_total[0],
-        "ram_mb": int(rss_mb) // 1024 if rss_mb else 0,
+        "approach": "GPU Transformation (Metal Shaders)",
+        "wall_time_sec": round(t_wall_total, 2),
+        "processed_count": processed_count[0],
+        "throughput_fps": round(processed_count[0] / t_wall_total, 1),
+        "cpu_decompress_sum_sec": round(t_decompress_total[0], 2),
+        "cpu_decompress_effective_wall_sec": round(t_decompress_total[0] / num_workers, 2),
+        "transform_time_sec": round(t_gpu_transform_total[0], 2),
+        "gpu_nn_forward_time_sec": round(t_gpu_nn_total[0], 2),
+        "gpu_norm_time_sec": round(t_gpu_norm_total[0], 3),
+        "peak_ram_mb": round(ram_mb, 1),
     }
 
 def main():
-    folder = "/Users/rushivyas/Pictures/pin-bhabha/"
-    count = 1000
-    files = load_files(folder, count)
-    print(f"Loaded {len(files)} test files from {folder}")
+    parser = argparse.ArgumentParser(description="Detailed Telemetry Benchmark on 1000 Photos")
+    parser.add_argument("--folder", default="/Users/rushivyas/Pictures/pin-bhabha/", help="Folder of test images")
+    parser.add_argument("--count", type=int, default=1000, help="Number of files to benchmark")
+    parser.add_argument("--output", default=None, help="Output file path for markdown report")
+    args = parser.parse_args()
 
-    # Load Model
+    files = load_files(args.folder, args.count)
+    print(f"Loaded {len(files)} test files from {args.folder}")
+
     model_name = "google/siglip2-base-patch16-224"
     print("Loading model...")
     model = AutoModel.from_pretrained(model_name, dtype=torch.float16).to("mps")
     model.eval()
     processor = AutoProcessor.from_pretrained(model_name)
 
-    # Run Benchmark 1: CPU Transformation
+    # Run Benchmark 1
     m1 = run_approach_1_cpu_transform(files, model, processor, batch_size=64, num_workers=12)
 
-    # Run Benchmark 2: GPU Transformation
+    # Run Benchmark 2
     m2 = run_approach_2_gpu_transform(files, model, batch_size=64, num_workers=12)
 
-    # Print Telemetry Comparison Table
-    print("\n" + "=" * 80)
-    print(" 📊 DETAILED TELEMETRY & STAGE BREAKDOWN (1,000 PHOTOS)")
-    print("=" * 80)
-    print(f"{'Pipeline Stage / Metric':<35} | {'Approach 1 (CPU Trans)':<20} | {'Approach 2 (GPU Trans)':<20}")
-    print("-" * 80)
-    print(f"{'Images Processed':<35} | {m1['processed']:<20} | {m2['processed']:<20}")
-    print(f"{'1. Decompression Sum (CPU Work)':<35} | {m1['cpu_decompress_sum']:.2f} seconds       | {m2['cpu_decompress_sum']:.2f} seconds")
-    print(f"{'   Decompression Effective Wall':<35} | {m1['cpu_decompress_eff']:.2f} seconds       | {m2['cpu_decompress_eff']:.2f} seconds")
-    print(f"{'2. Transformation Time':<35} | {m1['transform_time']:.2f}s (CPU Python)  | {m2['transform_time']:.2f}s (GPU Metal) ⚡")
-    print(f"{'3. GPU Neural Net Forward Pass':<35} | {m1['gpu_nn_time']:.2f} seconds        | {m2['gpu_nn_time']:.2f} seconds")
-    print(f"{'4. GPU L2 Vector Normalization':<35} | {m1['gpu_norm_time']:.3f} seconds       | {m2['gpu_norm_time']:.3f} seconds")
-    print("-" * 80)
-    print(f"{'TOTAL WALL CLOCK TIME':<35} | {m1['wall_time']:.2f} seconds       | {m2['wall_time']:.2f} seconds")
-    print(f"{'END-TO-END THROUGHPUT':<35} | {m1['fps']:.1f} img/sec         | {m2['fps']:.1f} img/sec 🚀")
-    print(f"{'PEAK PROCESS RAM':<35} | {m1['ram_mb']} MB                 | {m2['ram_mb']} MB")
-    print("=" * 80)
+    # Build Comparison Table
+    lines = [
+        "=" * 80,
+        " 📊 DETAILED TELEMETRY & STAGE BREAKDOWN (1,000 PHOTOS)",
+        "=" * 80,
+        f"{'Pipeline Stage / Metric':<35} | {'Approach 1 (CPU Trans)':<20} | {'Approach 2 (GPU Trans)':<20}",
+        "-" * 80,
+        f"{'Images Processed':<35} | {m1['processed_count']:<20} | {m2['processed_count']:<20}",
+        f"{'1. Decompression Sum (CPU Work)':<35} | {m1['cpu_decompress_sum_sec']:.2f} seconds       | {m2['cpu_decompress_sum_sec']:.2f} seconds",
+        f"{'   Decompression Effective Wall':<35} | {m1['cpu_decompress_effective_wall_sec']:.2f} seconds       | {m2['cpu_decompress_effective_wall_sec']:.2f} seconds",
+        f"{'2. Transformation Time':<35} | {m1['transform_time_sec']:.2f}s (CPU Python)  | {m2['transform_time_sec']:.2f}s (GPU Metal) ⚡",
+        f"{'3. GPU Neural Net Forward Pass':<35} | {m1['gpu_nn_forward_time_sec']:.2f} seconds        | {m2['gpu_nn_forward_time_sec']:.2f} seconds",
+        f"{'4. GPU L2 Vector Normalization':<35} | {m1['gpu_norm_time_sec']:.3f} seconds       | {m2['gpu_norm_time_sec']:.3f} seconds",
+        "-" * 80,
+        f"{'TOTAL WALL CLOCK TIME':<35} | {m1['wall_time_sec']:.2f} seconds       | {m2['wall_time_sec']:.2f} seconds",
+        f"{'END-TO-END THROUGHPUT':<35} | {m1['throughput_fps']:.1f} img/sec         | {m2['throughput_fps']:.1f} img/sec 🚀",
+        f"{'PEAK PROCESS RAM':<35} | {m1['peak_ram_mb']:.0f} MB                 | {m2['peak_ram_mb']:.0f} MB",
+        "=" * 80,
+    ]
+    table_str = "\n".join(lines)
+    print("\n" + table_str)
+
+    # Save to file
+    save_benchmark_report(
+        title="SigLIP 2 Telemetry Breakdown: CPU vs GPU Transformation (1,000 Photos)",
+        table_str=table_str,
+        metrics_dict={"approach_1_cpu_transform": m1, "approach_2_gpu_transform": m2},
+        output_path=args.output,
+        default_filename_prefix="telemetry_breakdown_1000",
+    )
 
 if __name__ == "__main__":
     main()

@@ -1,29 +1,29 @@
 """Stress test and throughput benchmark for SigLIP 2 on Apple Silicon (MPS).
-Measures:
-1. End-to-end throughput (Disk I/O + HEIC/JPG decode + Preprocess + MPS GPU inference)
-2. Pure GPU model inference throughput
-3. Optimal batch size comparison (16, 32, 64, 128)
+Outputs formatted results and saves report file to data/benchmarks/.
 """
 import os
 import sys
 import time
 import argparse
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
 from concurrent.futures import ThreadPoolExecutor
 import numpy as np
 import torch
 from PIL import Image
 import pillow_heif
 
-# Enable HEIC support for PIL
 pillow_heif.register_heif_opener()
 
 from transformers import AutoModel, AutoProcessor
+from telemetry_utils import get_current_ram_mb, get_mps_ram_mb, save_benchmark_report
 
 def load_and_preprocess_image(path: Path) -> Image.Image | None:
     try:
         with Image.open(path) as img:
-            # Convert to RGB (handles RGBA, grayscale, CMYK, etc.)
             return img.convert("RGB")
     except Exception as e:
         print(f"Error loading {path}: {e}", file=sys.stderr)
@@ -35,6 +35,7 @@ def run_benchmark(
     batch_size: int = 64,
     workers: int = 8,
     model_name: str = "google/siglip2-base-patch16-224",
+    output_path: str | None = None,
 ):
     print("=" * 70)
     print(" SIGLIP 2 IMAGE EMBEDDING STRESS TEST (APPLE SILICON MPS)")
@@ -44,7 +45,6 @@ def run_benchmark(
     print(f"PyTorch version: {torch.__version__} | Device: mps (Apple Silicon GPU)")
     print(f"Workers for I/O & decoding: {workers}")
 
-    # 1. Discover all images
     root = Path(folder_path)
     if not root.exists():
         print(f"Error: Folder {folder_path} does not exist!")
@@ -62,15 +62,14 @@ def run_benchmark(
     selected_files = all_files[:max_images]
     print(f"Running benchmark on {len(selected_files)} images (batch size = {batch_size})...\n")
 
-    # 2. Load model & processor
     print("Loading model onto MPS GPU...")
     t_load_start = time.perf_counter()
     model = AutoModel.from_pretrained(model_name, dtype=torch.float16).to("mps")
     model.eval()
     processor = AutoProcessor.from_pretrained(model_name)
-    print(f"✓ Model loaded in {time.perf_counter() - t_load_start:.2f}s\n")
+    load_sec = time.perf_counter() - t_load_start
+    print(f"✓ Model loaded in {load_sec:.2f}s\n")
 
-    # 3. Warm-up GPU
     print("Warming up MPS pipeline...")
     dummy_imgs = [Image.fromarray(np.zeros((224, 224, 3), dtype=np.uint8)) for _ in range(batch_size)]
     dummy_inputs = processor(images=dummy_imgs, return_tensors="pt").to("mps")
@@ -79,18 +78,13 @@ def run_benchmark(
     torch.mps.synchronize()
     print("✓ Warm-up complete.\n")
 
-    # =========================================================================
-    # TEST 1: Pure GPU Model Inference (Preprocessed tensors in memory)
-    # =========================================================================
+    # TEST 1: Pure GPU Model Inference
     print("--- [TEST 1] Pure GPU Inference Throughput ---")
-    print(f"Evaluating {len(selected_files)} image passes on GPU in batches of {batch_size}...")
-
     total_batches = (len(selected_files) + batch_size - 1) // batch_size
     t_gpu_start = time.perf_counter()
 
     with torch.inference_mode():
-        for b in range(total_batches):
-            # Pass pre-created dummy inputs to measure raw tensor math throughput
+        for _ in range(total_batches):
             _ = model.get_image_features(**dummy_inputs)
         torch.mps.synchronize()
 
@@ -99,31 +93,25 @@ def run_benchmark(
     print(f"✓ Pure GPU Time: {t_gpu_total:.2f}s")
     print(f"⚡ Pure GPU Throughput: {gpu_fps:.1f} images/sec\n")
 
-    # =========================================================================
-    # TEST 2: End-to-End Real World (Disk I/O + HEIC/JPG Decode + GPU Embed)
-    # =========================================================================
+    # TEST 2: End-to-End Real World
     print("--- [TEST 2] End-to-End Throughput (Disk I/O + Decode + Embed) ---")
     t_e2e_start = time.perf_counter()
     embedded_count = 0
     embedding_dim = None
 
-    # Process in streaming chunks with threadpool decoding
     with ThreadPoolExecutor(max_workers=workers) as executor:
         for i in range(0, len(selected_files), batch_size):
             chunk_paths = selected_files[i : i + batch_size]
             t_batch_start = time.perf_counter()
 
-            # Parallel decode images
             images = list(executor.map(load_and_preprocess_image, chunk_paths))
             valid_images = [img for img in images if img is not None]
 
             if not valid_images:
                 continue
 
-            # Preprocess & transfer to MPS
             inputs = processor(images=valid_images, return_tensors="pt").to("mps")
 
-            # GPU inference
             with torch.inference_mode():
                 features = model.get_image_features(**inputs)
                 if hasattr(features, "pooler_output") and features.pooler_output is not None:
@@ -134,9 +122,7 @@ def run_benchmark(
                     emb = features
                 else:
                     emb = features[0]
-                
-                # Normalization
-                emb = emb / emb.norm(dim=-1, keepdim=True)
+                _ = emb / emb.norm(dim=-1, keepdim=True)
                 
             torch.mps.synchronize()
 
@@ -152,28 +138,50 @@ def run_benchmark(
 
     t_e2e_total = time.perf_counter() - t_e2e_start
     e2e_fps = embedded_count / t_e2e_total
+    ram_mb = get_current_ram_mb()
+    mps_mb = get_mps_ram_mb()
 
-    # 4. Check memory
-    rss_mb = os.popen(f"ps -o rss= -p {os.getpid()}").read().strip()
-    mem_str = f"{int(rss_mb) // 1024} MB" if rss_mb else "N/A"
+    lines = [
+        "=" * 70,
+        " STRESS TEST RESULTS",
+        "=" * 70,
+        f"Total images processed : {embedded_count}",
+        f"Embedding dimension    : {embedding_dim}",
+        f"Total time elapsed     : {t_e2e_total:.2f} seconds",
+        f"End-to-End Speed       : {e2e_fps:.1f} images/second",
+        f"Pure GPU Max Speed     : {gpu_fps:.1f} images/second",
+        f"Peak Process RAM       : {ram_mb:.0f} MB",
+        f"MPS Allocated Memory   : {mps_mb:.0f} MB",
+        "=" * 70,
+    ]
+    table_str = "\n".join(lines)
+    print("\n" + table_str)
 
-    print("\n" + "=" * 70)
-    print(" STRESS TEST RESULTS")
-    print("=" * 70)
-    print(f"Total images processed : {embedded_count}")
-    print(f"Embedding dimension    : {embedding_dim}")
-    print(f"Total time elapsed     : {t_e2e_total:.2f} seconds")
-    print(f"End-to-End Speed       : {e2e_fps:.1f} images/second")
-    print(f"Pure GPU Max Speed     : {gpu_fps:.1f} images/second")
-    print(f"Peak Process Memory    : {mem_str}")
-    print("=" * 70)
+    metrics = {
+        "dataset": {"folder": folder_path, "total_files": len(all_files), "tested_count": len(selected_files)},
+        "load_time_sec": round(load_sec, 2),
+        "pure_gpu_throughput_fps": round(gpu_fps, 1),
+        "e2e_time_sec": round(t_e2e_total, 2),
+        "e2e_throughput_fps": round(e2e_fps, 1),
+        "peak_ram_mb": round(ram_mb, 1),
+        "mps_allocated_mb": round(mps_mb, 1),
+    }
+
+    save_benchmark_report(
+        title="SigLIP 2 Image Embedding Stress Test",
+        table_str=table_str,
+        metrics_dict=metrics,
+        output_path=output_path,
+        default_filename_prefix="stress_test_results",
+    )
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="SigLIP 2 Stress Test")
     parser.add_argument("--folder", default="/Users/rushivyas/Pictures/pin-bhabha/", help="Images folder path")
-    parser.add_argument("--count", type=int, default=1000, help="Number of images to process (e.g. 1000 or all 1472)")
+    parser.add_argument("--count", type=int, default=1000, help="Number of images to process")
     parser.add_argument("--batch-size", type=int, default=64, help="Batch size for GPU inference")
     parser.add_argument("--workers", type=int, default=8, help="Number of concurrent I/O decoding workers")
+    parser.add_argument("--output", default=None, help="Output markdown report file")
     args = parser.parse_args()
 
     run_benchmark(
@@ -181,4 +189,5 @@ if __name__ == "__main__":
         max_images=args.count,
         batch_size=args.batch_size,
         workers=args.workers,
+        output_path=args.output,
     )

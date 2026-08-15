@@ -1,12 +1,18 @@
 """Side-by-side benchmark comparison on 1,000 real photos:
-Old Baseline (Sequential/Standard PIL) vs Combined B+C (Native Apple ImageIO + Async Producer-Consumer Queue).
+Baseline vs Combined B+C (Native Apple ImageIO + Async Queue).
+Outputs formatted table and saves report file to data/benchmarks/.
 """
 import os
 import sys
 import time
 import queue
 import threading
+import argparse
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
 from PIL import Image
 import numpy as np
 import torch
@@ -14,14 +20,15 @@ import Quartz
 from Foundation import NSURL
 from transformers import AutoModel, AutoProcessor
 
-def run_1000_photo_benchmark(folder_path: str = "/Users/rushivyas/Pictures/pin-bhabha/", count: int = 1000):
+from telemetry_utils import get_current_ram_mb, get_mps_ram_mb, save_benchmark_report
+
+def run_1000_photo_benchmark(folder_path: str = "/Users/rushivyas/Pictures/pin-bhabha/", count: int = 1000, output_path: str | None = None):
     print("=" * 75)
     print(" 1,000 PHOTOS EMBEDDING BENCHMARK: OLD vs COMBINED B+C PIPELINE")
     print("=" * 75)
     print(f"Target folder : {folder_path}")
     print(f"Sample count  : {count} photos")
 
-    # 1. Discover all files
     root = Path(folder_path)
     exts = {".jpg", ".jpeg", ".png", ".heic", ".heif", ".webp", ".tiff"}
     all_files = [f for f in root.rglob("*") if f.is_file() and f.suffix.lower() in exts]
@@ -33,7 +40,6 @@ def run_1000_photo_benchmark(folder_path: str = "/Users/rushivyas/Pictures/pin-b
         ext_counts[ext] = ext_counts.get(ext, 0) + 1
     print(f"Selected {len(files)} files: {ext_counts}\n")
 
-    # 2. Load model & processor
     model_name = "google/siglip2-base-patch16-224"
     print("Loading SigLIP 2 onto Apple Silicon GPU (MPS)...")
     t_model = time.perf_counter()
@@ -42,18 +48,16 @@ def run_1000_photo_benchmark(folder_path: str = "/Users/rushivyas/Pictures/pin-b
     processor = AutoProcessor.from_pretrained(model_name)
     print(f"✓ Model loaded in {time.perf_counter() - t_model:.2f}s\n")
 
-    # 3. Warm-up GPU & Measure Pure GPU Inference
+    # 1. Measure Pure GPU Inference
     print("--- [1] PURE GPU INFERENCE BENCHMARK ---")
     batch_size = 64
     dummy_batch = [Image.fromarray(np.zeros((224, 224, 3), dtype=np.uint8)) for _ in range(batch_size)]
     dummy_inputs = processor(images=dummy_batch, return_tensors="pt").to("mps")
     
-    # Warmup
     with torch.inference_mode():
         _ = model.get_image_features(**dummy_inputs)
     torch.mps.synchronize()
 
-    # Measure 1000 passes on GPU
     total_batches = (len(files) + batch_size - 1) // batch_size
     t_gpu_start = time.perf_counter()
     with torch.inference_mode():
@@ -65,7 +69,7 @@ def run_1000_photo_benchmark(folder_path: str = "/Users/rushivyas/Pictures/pin-b
     print(f"✓ Pure GPU Forward-Pass Time : {t_gpu_total:.2f} seconds (for {len(files)} images)")
     print(f"⚡ Pure GPU Inference Speed   : {pure_gpu_fps:.1f} images/second\n")
 
-    # 4. Measure Combined B+C End-to-End Pipeline
+    # 2. Measure Combined B+C End-to-End Pipeline
     print("--- [2] COMBINED B+C END-TO-END PIPELINE (ImageIO + Async Queue) ---")
     frame_queue = queue.Queue(maxsize=128)
     options = {
@@ -78,7 +82,6 @@ def run_1000_photo_benchmark(folder_path: str = "/Users/rushivyas/Pictures/pin-b
     def decode_worker(chunk):
         for f in chunk:
             try:
-                # Fast path for HEIC/JPG via Apple ImageIO hardware thumbnail
                 url = NSURL.fileURLWithPath_(str(f))
                 src = Quartz.CGImageSourceCreateWithURL(url, None)
                 if src:
@@ -91,7 +94,6 @@ def run_1000_photo_benchmark(folder_path: str = "/Users/rushivyas/Pictures/pin-b
                         img = Image.frombuffer("RGBA", (w, h), bytes(data), "raw", "RGBA", 0, 1).convert("RGB")
                         frame_queue.put(img)
                         continue
-                # Fallback to PIL if ImageIO returns None
                 with Image.open(f) as img:
                     img = img.convert("RGB")
                     img.thumbnail((224, 224))
@@ -99,7 +101,6 @@ def run_1000_photo_benchmark(folder_path: str = "/Users/rushivyas/Pictures/pin-b
             except Exception:
                 pass
 
-    # Launch 12 Producer Threads
     num_workers = 12
     threads = []
     chunk_size = (len(files) + num_workers - 1) // num_workers
@@ -111,7 +112,6 @@ def run_1000_photo_benchmark(folder_path: str = "/Users/rushivyas/Pictures/pin-b
         t.start()
         threads.append(t)
 
-    # Launch GPU Consumer Thread
     processed_count = [0]
     gpu_active_time = [0.0]
 
@@ -168,28 +168,55 @@ def run_1000_photo_benchmark(folder_path: str = "/Users/rushivyas/Pictures/pin-b
     t_e2e_total = time.perf_counter() - t_e2e_start
     total_imgs = processed_count[0]
     e2e_fps = total_imgs / t_e2e_total
+    ram_mb = get_current_ram_mb()
 
-    # Peak memory
-    rss_mb = os.popen(f"ps -o rss= -p {os.getpid()}").read().strip()
-    mem_str = f"{int(rss_mb) // 1024} MB" if rss_mb else "N/A"
-
-    # Previous baseline numbers for comparison
     prev_runtime = 74.23
     prev_fps = 13.4
     prev_gpu_fps = 350.0
 
-    print("\n" + "=" * 75)
-    print(" FINAL COMPARISON RESULTS (1,000 REAL PHOTOS)")
-    print("=" * 75)
-    print(f"{'Metric':<30} | {'Previous Baseline':<20} | {'Combined B+C':<20}")
-    print("-" * 75)
-    print(f"{'Overall Runtime':<30} | {prev_runtime:.2f} seconds          | {t_e2e_total:.2f} seconds")
-    print(f"{'End-to-End Speed':<30} | {prev_fps:.1f} images/sec         | {e2e_fps:.1f} images/sec")
-    print(f"{'Pure GPU Forward Speed':<30} | {prev_gpu_fps:.1f} images/sec       | {pure_gpu_fps:.1f} images/sec")
-    print(f"{'Active GPU Compute Time':<30} | {'N/A':<20} | {gpu_active_time[0]:.2f} seconds")
-    print(f"{'Peak Process RAM':<30} | {'5,208 MB':<20} | {mem_str:<20}")
-    print(f"{'Overall Performance Gain':<30} | {'1.0x (baseline)':<20} | {prev_runtime / t_e2e_total:.2f}x Faster! 🚀")
-    print("=" * 75)
+    lines = [
+        "=" * 75,
+        " FINAL COMPARISON RESULTS (1,000 REAL PHOTOS)",
+        "=" * 75,
+        f"{'Metric':<30} | {'Previous Baseline':<20} | {'Combined B+C':<20}",
+        "-" * 75,
+        f"{'Overall Runtime':<30} | {prev_runtime:.2f} seconds          | {t_e2e_total:.2f} seconds",
+        f"{'End-to-End Speed':<30} | {prev_fps:.1f} images/sec         | {e2e_fps:.1f} images/sec",
+        f"{'Pure GPU Forward Speed':<30} | {prev_gpu_fps:.1f} images/sec       | {pure_gpu_fps:.1f} images/sec",
+        f"{'Active GPU Compute Time':<30} | {'N/A':<20} | {gpu_active_time[0]:.2f} seconds",
+        f"{'Peak Process RAM':<30} | {'5,208 MB':<20} | {ram_mb:.0f} MB",
+        f"{'Overall Performance Gain':<30} | {'1.0x (baseline)':<20} | {prev_runtime / t_e2e_total:.2f}x Faster! 🚀",
+        "=" * 75,
+    ]
+    table_str = "\n".join(lines)
+    print("\n" + table_str)
+
+    metrics = {
+        "dataset": {"folder": folder_path, "sample_count": count, "breakdown": ext_counts},
+        "baseline": {"runtime_sec": prev_runtime, "fps": prev_fps, "gpu_fps": prev_gpu_fps, "ram_mb": 5208},
+        "combined_bc": {
+            "runtime_sec": round(t_e2e_total, 2),
+            "fps": round(e2e_fps, 1),
+            "gpu_fps": round(pure_gpu_fps, 1),
+            "active_gpu_sec": round(gpu_active_time[0], 2),
+            "peak_ram_mb": round(ram_mb, 1),
+            "speedup": round(prev_runtime / t_e2e_total, 2),
+        },
+    }
+
+    save_benchmark_report(
+        title="1,000 Photos Embedding Benchmark: Baseline vs Combined B+C",
+        table_str=table_str,
+        metrics_dict=metrics,
+        output_path=output_path,
+        default_filename_prefix="compare_benchmark_1000",
+    )
 
 if __name__ == "__main__":
-    run_1000_photo_benchmark()
+    parser = argparse.ArgumentParser(description="Compare 1000 photo benchmark")
+    parser.add_argument("--folder", default="/Users/rushivyas/Pictures/pin-bhabha/", help="Folder of test images")
+    parser.add_argument("--count", type=int, default=1000, help="Number of files to benchmark")
+    parser.add_argument("--output", default=None, help="Output file path for markdown report")
+    args = parser.parse_args()
+
+    run_1000_photo_benchmark(args.folder, args.count, args.output)
