@@ -1,0 +1,253 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Local AI Moments Generator | Apple Silicon Control Center</title>
+    <!-- Modern Typography -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700&family=Plus+Jakarta+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="app-container">
+        <!-- Top Navigation Bar -->
+        <header class="app-header">
+            <div class="brand">
+                <div class="brand-icon">✨</div>
+                <div class="brand-text">
+                    <h1>Moments Generator</h1>
+                    <span class="badge badge-accent">Apple Silicon M-Series</span>
+                </div>
+            </div>
+            
+            <div class="header-health" id="headerHealth">
+                <div class="health-pill" id="pillModel">
+                    <span class="status-dot dot-loading"></span>
+                    <span class="pill-label">Model: Checking...</span>
+                </div>
+                <div class="health-pill" id="pillQdrant">
+                    <span class="status-dot dot-loading"></span>
+                    <span class="pill-label">Qdrant: Checking...</span>
+                </div>
+                <div class="health-pill" id="pillFFmpeg">
+                    <span class="status-dot dot-loading"></span>
+                    <span class="pill-label">FFmpeg: Checking...</span>
+                </div>
+                <button class="btn btn-secondary btn-icon" id="btnRefreshHealth" title="Refresh Status">
+                    🔄
+                </button>
+            </div>
+        </header>
+
+        <!-- Main Content Area -->
+        <main class="app-main">
+            <!-- Navigation Tabs -->
+            <nav class="nav-tabs">
+                <button class="tab-btn active" data-tab="pipeline">🚀 Pipeline Control</button>
+                <button class="tab-btn" data-tab="health">⚡ System & Hardware</button>
+                <button class="tab-btn" data-tab="config">⚙️ Configuration</button>
+                <button class="tab-btn" data-tab="data">📁 Data Browser</button>
+            </nav>
+
+            <!-- Tab 1: Pipeline Control & Job Submission -->
+            <section class="tab-pane active" id="pane-pipeline">
+                <div class="grid-2col">
+                    <!-- Job Submission Card -->
+                    <div class="card glass-card">
+                        <div class="card-header">
+                            <h2>🎬 Generate Moments Video</h2>
+                            <span class="badge badge-muted">Milestone 8 Preview</span>
+                        </div>
+                        <p class="card-desc">Search your offline photo & video library using natural language semantics.</p>
+
+                        <form id="jobForm" class="form-grid">
+                            <div class="form-group">
+                                <label for="corpusPath">Corpus Folder Path</label>
+                                <input type="text" id="corpusPath" class="input-text" placeholder="/Users/username/Pictures/Holiday2025" value="/Users/rushivyas/Pictures/pin-bhabha/">
+                                <span class="input-hint">Local directory containing HEIC, JPG, and MP4/MOV files.</span>
+                            </div>
+
+                            <div class="form-group">
+                                <label for="promptText">Semantic Search Prompt</label>
+                                <input type="text" id="promptText" class="input-text" placeholder="e.g. friends having dinner outdoors at sunset" value="friends having dinner outdoors on a summer evening">
+                            </div>
+
+                            <div class="form-row">
+                                <div class="form-group flex-1">
+                                    <label for="durationSelect">Target Duration</label>
+                                    <select id="durationSelect" class="input-select">
+                                        <option value="30">30 seconds (Quick Reel)</option>
+                                        <option value="60" selected>60 seconds (Standard)</option>
+                                        <option value="120">2 minutes (Extended)</option>
+                                        <option value="180">3 minutes (Full Album)</option>
+                                    </select>
+                                </div>
+
+                                <div class="form-group flex-1">
+                                    <label for="aspectRatioSelect">Aspect Ratio</label>
+                                    <select id="aspectRatioSelect" class="input-select">
+                                        <option value="1:1" selected>1:1 Square (Feed)</option>
+                                        <option value="16:9">16:9 Widescreen (YouTube / TV)</option>
+                                        <option value="9:16">9:16 Vertical (Reels / TikTok)</option>
+                                    </select>
+                                </div>
+                            </div>
+
+                            <div class="form-checkbox">
+                                <input type="checkbox" id="forceReindex">
+                                <label for="forceReindex">Bypass manifest checkpoint and force re-embedding</label>
+                            </div>
+
+                            <div class="form-actions">
+                                <button type="button" class="btn btn-primary" id="btnSubmitJob" disabled>
+                                    ⚡ Generate Moments (Activates in M8)
+                                </button>
+                            </div>
+                        </form>
+                    </div>
+
+                    <!-- Architecture Overview Card -->
+                    <div class="card glass-card">
+                        <div class="card-header">
+                            <h2>📐 Pipeline Architecture</h2>
+                            <span class="badge badge-accent">3-Stage Hot Path</span>
+                        </div>
+                        <div class="pipeline-diagram">
+                            <div class="step-card">
+                                <div class="step-icon">📸</div>
+                                <div class="step-content">
+                                    <h3>1. Hardware Decoders</h3>
+                                    <p>Apple ImageIO (Photos) & OpenCV VideoToolbox (Videos) running across 12 threads.</p>
+                                </div>
+                            </div>
+                            <div class="step-arrow">⬇️</div>
+                            <div class="step-card">
+                                <div class="step-icon">⚡</div>
+                                <div class="step-content">
+                                    <h3>2. Fused GPU Consumer</h3>
+                                    <p>Apple MLX JIT-compiled kernel fusion (Normalise + SigLIP 2 Embed + L2 Norm).</p>
+                                </div>
+                            </div>
+                            <div class="step-arrow">⬇️</div>
+                            <div class="step-card">
+                                <div class="step-icon">📦</div>
+                                <div class="step-content">
+                                    <h3>3. Local Vector Indexing</h3>
+                                    <p>Qdrant vector collection with SQLite crash-safe state checkpointing.</p>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Tab 2: System Health & Hardware -->
+            <section class="tab-pane" id="pane-health">
+                <div class="grid-3col" id="healthCardsContainer">
+                    <div class="card glass-card health-card" id="cardModel">
+                        <div class="card-icon">🧠</div>
+                        <h3>AI Model Engine</h3>
+                        <p class="health-meta" id="modelDetails">Loading model backend...</p>
+                        <div class="status-tag" id="modelTag">Checking...</div>
+                    </div>
+
+                    <div class="card glass-card health-card" id="cardQdrant">
+                        <div class="card-icon">🗄️</div>
+                        <h3>Qdrant Vector DB</h3>
+                        <p class="health-meta" id="qdrantDetails">Checking connection...</p>
+                        <div class="status-tag" id="qdrantTag">Checking...</div>
+                    </div>
+
+                    <div class="card glass-card health-card" id="cardFFmpeg">
+                        <div class="card-icon">🎞️</div>
+                        <h3>FFmpeg VideoToolbox</h3>
+                        <p class="health-meta" id="ffmpegDetails">Checking renderer...</p>
+                        <div class="status-tag" id="ffmpegTag">Checking...</div>
+                    </div>
+                </div>
+
+                <div class="card glass-card margin-top">
+                    <div class="card-header">
+                        <h2>💾 Unified Memory Telemetry</h2>
+                    </div>
+                    <div class="memory-meter-container" id="memoryMeterContainer">
+                        <div class="memory-stats">
+                            <span id="memAvailable">Available: -- GB</span>
+                            <span id="memTotal">Total: -- GB</span>
+                        </div>
+                        <div class="progress-bar-bg">
+                            <div class="progress-bar-fill" id="memProgressFill" style="width: 0%;"></div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Tab 3: Configuration -->
+            <section class="tab-pane" id="pane-config">
+                <div class="card glass-card">
+                    <div class="card-header">
+                        <h2>⚙️ Active Runtime Settings</h2>
+                        <input type="text" id="configSearch" class="input-text-sm" placeholder="Filter settings...">
+                    </div>
+                    <div class="table-responsive">
+                        <table class="data-table" id="configTable">
+                            <thead>
+                                <tr>
+                                    <th>Parameter</th>
+                                    <th>Active Value</th>
+                                    <th>Description / Rationale</th>
+                                </tr>
+                            </thead>
+                            <tbody id="configTableBody">
+                                <tr><td colspan="3" class="text-center">Loading configuration...</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Tab 4: Data & Manifest Browser -->
+            <section class="tab-pane" id="pane-data">
+                <div class="card glass-card">
+                    <div class="card-header">
+                        <h2>📁 Working Data Directory (`data/`)</h2>
+                        <button class="btn btn-secondary btn-sm" id="btnRefreshData">Refresh Files</button>
+                    </div>
+                    <p class="card-desc" id="dataDirRoot">Path: --</p>
+                    <div class="table-responsive">
+                        <table class="data-table" id="dataTable">
+                            <thead>
+                                <tr>
+                                    <th>Type</th>
+                                    <th>Relative Path</th>
+                                    <th>Size</th>
+                                    <th>Last Modified</th>
+                                </tr>
+                            </thead>
+                            <tbody id="dataTableBody">
+                                <tr><td colspan="4" class="text-center">Scanning directory...</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </section>
+        </main>
+
+        <!-- Footer -->
+        <footer class="app-footer">
+            <div class="footer-left">
+                <span>Local AI Moments Generator • v0.1.0</span>
+                <span class="separator">•</span>
+                <span class="badge badge-success">Offline & 100% Private</span>
+            </div>
+            <div class="footer-right">
+                <a href="/docs" target="_blank" class="footer-link">API Swagger Docs</a>
+            </div>
+        </footer>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>
