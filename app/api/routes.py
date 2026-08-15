@@ -6,10 +6,12 @@ import os
 import shutil
 import subprocess
 import datetime
+import tempfile
 from pathlib import Path
-from typing import Dict, Any
+from typing import Dict, Any, Optional, List
 
-from fastapi import APIRouter, HTTPException, status
+import numpy as np
+from fastapi import APIRouter, HTTPException, status, File, Form, UploadFile
 from qdrant_client import QdrantClient
 
 from app.config import get_settings
@@ -27,8 +29,20 @@ from app.api.schemas import (
     ScannedFileItem,
 )
 from app.db.manifest import ManifestDB
+from app.core.embedder import create_embedder, EmbedderInterface
+from app.core.extractor import decode_image
 
 router = APIRouter()
+
+# Cached embedder instance for real-time interactive testing
+_embedder: Optional[EmbedderInterface] = None
+
+
+def get_active_embedder() -> EmbedderInterface:
+    global _embedder
+    if _embedder is None:
+        _embedder = create_embedder()
+    return _embedder
 
 
 def check_ffmpeg() -> ComponentStatus:
@@ -192,6 +206,62 @@ def get_debug_data() -> DataDirResponse:
         data_dir=str(data_path.resolve()),
         items=items,
     )
+
+
+@router.post("/debug/embed")
+async def debug_embed(
+    text: Optional[str] = Form(None),
+    file: Optional[UploadFile] = File(None),
+) -> Dict[str, Any]:
+    """
+    Diagnostic playground endpoint: Compute multimodal SigLIP 2 embeddings
+    for arbitrary user-provided text prompts or uploaded/pasted images.
+    """
+    if not text and not file:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="At least one of 'text' or 'file' must be provided.",
+        )
+
+    embedder = get_active_embedder()
+    res: Dict[str, Any] = {
+        "model_info": embedder.model_info(),
+        "text": text,
+        "filename": file.filename if file else None,
+    }
+
+    text_vec = None
+    if text and text.strip():
+        text_vec = embedder.embed_text(text.strip())
+        res["text_embedding"] = text_vec.tolist()
+        res["text_dim"] = len(text_vec)
+
+    img_vec = None
+    if file:
+        # Save upload to a temp file to feed into our ImageIO/Pillow pipeline
+        suffix = Path(file.filename or "temp.jpg").suffix
+        if not suffix:
+            suffix = ".jpg"
+        with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
+            tmp_path = tmp.name
+            shutil.copyfileobj(file.file, tmp)
+
+        try:
+            frame_data = decode_image(tmp_path, target_size=224)
+            img_vec = embedder.embed_images([frame_data.pixels])[0]
+            res["image_embedding"] = img_vec.tolist()
+            res["image_dim"] = len(img_vec)
+            res["image_shape"] = list(frame_data.pixels.shape)
+        finally:
+            if os.path.exists(tmp_path):
+                os.unlink(tmp_path)
+
+    if text_vec is not None and img_vec is not None:
+        similarity = float(np.dot(text_vec, img_vec))
+        res["similarity"] = round(similarity, 4)
+
+    return res
+
 
 
 # =========================================================================

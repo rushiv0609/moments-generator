@@ -82,3 +82,40 @@ def test_job_stubs_return_501():
 
     res_dl = client.get("/api/v1/jobs/test-id/download")
     assert res_dl.status_code == 501
+
+
+def test_debug_embed_endpoint(tmp_path):
+    """Verify POST /api/v1/debug/embed computes text and image embeddings."""
+    # 1. Test Text-only embedding
+    res_text = client.post("/api/v1/debug/embed", data={"text": "a snowy mountain peak"})
+    assert res_text.status_code == 200
+    data_text = res_text.json()
+    assert "text_embedding" in data_text
+    assert len(data_text["text_embedding"]) == 768
+
+    # 2. Test Image-only embedding
+    img_path = tmp_path / "test_embed.jpg"
+    img = Image.new("RGB", (224, 224), color="blue")
+    img.save(img_path)
+
+    with open(img_path, "rb") as f:
+        res_img = client.post("/api/v1/debug/embed", files={"file": ("test_embed.jpg", f, "image/jpeg")})
+    assert res_img.status_code == 200
+    data_img = res_img.json()
+    assert "image_embedding" in data_img
+    assert len(data_img["image_embedding"]) == 768
+
+    # 3. Test Combined Text + Image embedding with similarity
+    with open(img_path, "rb") as f:
+        res_both = client.post(
+            "/api/v1/debug/embed",
+            data={"text": "a clear blue sky"},
+            files={"file": ("test_embed.jpg", f, "image/jpeg")},
+        )
+    assert res_both.status_code == 200
+    data_both = res_both.json()
+    assert "text_embedding" in data_both
+    assert "image_embedding" in data_both
+    assert "similarity" in data_both
+    assert isinstance(data_both["similarity"], float)
+

@@ -4,6 +4,7 @@
 
 document.addEventListener("DOMContentLoaded", () => {
     initTabs();
+    initPlayground();
     fetchHealth();
     fetchConfig();
     fetchDataDir();
@@ -324,3 +325,417 @@ function formatBytes(bytes) {
 function showToast(message) {
     console.log("[Toast]", message);
 }
+
+/**
+ * =========================================================================
+ * Semantic Playground Interactive Controller
+ * =========================================================================
+ */
+let targetState = {
+    A: { type: "image", file: null, text: "" },
+    B: { type: "text", file: null, text: "" },
+};
+
+function initPlayground() {
+    setupToggleButtons();
+    setupDropzones();
+    setupChips();
+    setupGlobalPaste();
+
+    const btnCalc = document.getElementById("btnCalculateSimilarity");
+    if (btnCalc) {
+        btnCalc.addEventListener("click", calculateSimilarity);
+    }
+
+    const btnReset = document.getElementById("btnResetPlayground");
+    if (btnReset) {
+        btnReset.addEventListener("click", resetPlayground);
+    }
+
+    const btnClearA = document.getElementById("btnClearImgA");
+    if (btnClearA) {
+        btnClearA.addEventListener("click", (e) => {
+            e.stopPropagation();
+            clearImageTarget("A");
+        });
+    }
+
+    const btnClearB = document.getElementById("btnClearImgB");
+    if (btnClearB) {
+        btnClearB.addEventListener("click", (e) => {
+            e.stopPropagation();
+            clearImageTarget("B");
+        });
+    }
+}
+
+function setupToggleButtons() {
+    document.querySelectorAll(".toggle-btn").forEach(btn => {
+        btn.addEventListener("click", (e) => {
+            const target = btn.getAttribute("data-target");
+            const type = btn.getAttribute("data-type");
+
+            // Update state
+            targetState[target].type = type;
+
+            // Update UI toggle buttons
+            const card = document.getElementById(`cardTarget${target}`);
+            card.querySelectorAll(".toggle-btn").forEach(b => b.classList.remove("active"));
+            btn.classList.add("active");
+
+            // Switch visibility
+            const dropzone = document.getElementById(`dropzone${target}`);
+            const textContainer = document.getElementById(`textContainer${target}`);
+
+            if (type === "image") {
+                dropzone.style.display = "block";
+                textContainer.style.display = "none";
+            } else {
+                dropzone.style.display = "none";
+                textContainer.style.display = "block";
+            }
+        });
+    });
+}
+
+function setupDropzones() {
+    ["A", "B"].forEach(t => {
+        const dropArea = document.getElementById(`dropArea${t}`);
+        const fileInput = document.getElementById(`fileInput${t}`);
+
+        if (!dropArea || !fileInput) return;
+
+        // Click to browse
+        dropArea.addEventListener("click", () => {
+            if (!targetState[t].file) {
+                fileInput.click();
+            }
+        });
+
+        // File input changed
+        fileInput.addEventListener("change", (e) => {
+            if (e.target.files && e.target.files[0]) {
+                handleFileSelected(t, e.target.files[0]);
+            }
+        });
+
+        // Drag & Drop
+        ["dragenter", "dragover"].forEach(eventName => {
+            dropArea.addEventListener(eventName, (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                dropArea.classList.add("dragover");
+            }, false);
+        });
+
+        ["dragleave", "drop"].forEach(eventName => {
+            dropArea.addEventListener(eventName, (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                dropArea.classList.remove("dragover");
+            }, false);
+        });
+
+        dropArea.addEventListener("drop", (e) => {
+            const dt = e.dataTransfer;
+            if (dt && dt.files && dt.files.length > 0) {
+                handleFileSelected(t, dt.files[0]);
+            }
+        }, false);
+    });
+}
+
+function handleFileSelected(target, file) {
+    targetState[target].file = file;
+
+    const placeholder = document.getElementById(`placeholder${target}`);
+    const previewContainer = document.getElementById(`previewContainer${target}`);
+    const previewImg = document.getElementById(`previewImg${target}`);
+    const previewMeta = document.getElementById(`previewMeta${target}`);
+
+    const reader = new FileReader();
+    reader.onload = (e) => {
+        previewImg.src = e.target.result;
+        placeholder.style.display = "none";
+        previewContainer.style.display = "flex";
+        const sizeStr = formatBytes(file.size);
+        previewMeta.textContent = `${file.name} (${sizeStr})`;
+    };
+    reader.readAsDataURL(file);
+}
+
+function clearImageTarget(target) {
+    targetState[target].file = null;
+    const fileInput = document.getElementById(`fileInput${target}`);
+    if (fileInput) fileInput.value = "";
+
+    const placeholder = document.getElementById(`placeholder${target}`);
+    const previewContainer = document.getElementById(`previewContainer${target}`);
+    const previewImg = document.getElementById(`previewImg${target}`);
+
+    if (previewImg) previewImg.src = "";
+    if (previewContainer) previewContainer.style.display = "none";
+    if (placeholder) placeholder.style.display = "block";
+}
+
+function setupChips() {
+    document.querySelectorAll(".chip").forEach(chip => {
+        chip.addEventListener("click", () => {
+            const target = chip.getAttribute("data-target");
+            const text = chip.textContent.replace(/^[^\w\s]+/, "").trim(); // strip emoji
+            const textarea = document.getElementById(`textInput${target}`);
+            if (textarea) {
+                textarea.value = `a photo of ${text}`;
+            }
+        });
+    });
+}
+
+/**
+ * Global & Dropzone Clipboard Paste Listener (Cmd+V)
+ */
+function setupGlobalPaste() {
+    window.addEventListener("paste", (e) => {
+        const items = (e.clipboardData || e.originalEvent.clipboardData).items;
+        if (!items) return;
+
+        for (let i = 0; i < items.length; i++) {
+            if (items[i].type.indexOf("image") !== -1) {
+                const blob = items[i].getAsFile();
+                if (blob) {
+                    // Determine which target to paste into:
+                    // If target A is currently 'image' and empty, use A; otherwise if B is 'image', use B; otherwise default to A
+                    let target = "A";
+                    if (targetState.A.type === "image" && !targetState.A.file) {
+                        target = "A";
+                    } else if (targetState.B.type === "image" && !targetState.B.file) {
+                        target = "B";
+                    } else if (targetState.A.type === "image") {
+                        target = "A";
+                    }
+
+                    handleFileSelected(target, blob);
+                    showToast(`Pasted image into Target ${target}`);
+                    break;
+                }
+            }
+        }
+    });
+}
+
+function resetPlayground() {
+    clearImageTarget("A");
+    clearImageTarget("B");
+    const textA = document.getElementById("textInputA");
+    if (textA) textA.value = "";
+    const textB = document.getElementById("textInputB");
+    if (textB) textB.value = "";
+
+    const resultPanel = document.getElementById("resultPanel");
+    if (resultPanel) resultPanel.style.display = "none";
+}
+
+/**
+ * Fetch embeddings and calculate Cosine Similarity
+ */
+async function calculateSimilarity() {
+    const btnCalc = document.getElementById("btnCalculateSimilarity");
+    const resultPanel = document.getElementById("resultPanel");
+    const scoreVal = document.getElementById("resultScoreValue");
+    const statusBadge = document.getElementById("resultStatusBadge");
+    const interp = document.getElementById("resultInterpretation");
+    const gaugeFill = document.getElementById("gaugeBarFill");
+    const latencyEl = document.getElementById("calcLatency");
+    const backendEl = document.getElementById("calcBackend");
+
+    // Gather inputs
+    const typeA = targetState.A.type;
+    const typeB = targetState.B.type;
+
+    let textA = typeA === "text" ? document.getElementById("textInputA").value.trim() : null;
+    let fileA = typeA === "image" ? targetState.A.file : null;
+
+    let textB = typeB === "text" ? document.getElementById("textInputB").value.trim() : null;
+    let fileB = typeB === "image" ? targetState.B.file : null;
+
+    if (typeA === "text" && !textA) {
+        alert("Please enter a text prompt for Target A.");
+        return;
+    }
+    if (typeA === "image" && !fileA) {
+        alert("Please upload or paste an image for Target A.");
+        return;
+    }
+    if (typeB === "text" && !textB) {
+        alert("Please enter a text prompt for Target B.");
+        return;
+    }
+    if (typeB === "image" && !fileB) {
+        alert("Please upload or paste an image for Target B.");
+        return;
+    }
+
+    btnCalc.disabled = true;
+    btnCalc.textContent = "⏳ Computing Fused Embeddings...";
+    resultPanel.style.display = "block";
+    statusBadge.className = "badge badge-muted";
+    statusBadge.textContent = "Processing...";
+    scoreVal.textContent = "0.0000";
+    interp.textContent = "Calculating dot product...";
+
+    const startTime = performance.now();
+
+    try {
+        let vecA = null;
+        let vecB = null;
+        let backendName = "Apple MLX";
+
+        // If Image-Text pair, we can compute in 1 shot or separately
+        if (typeA === "image" && typeB === "text") {
+            const formData = new FormData();
+            formData.append("file", fileA);
+            formData.append("text", textB);
+
+            const res = await fetch("/api/v1/debug/embed", {
+                method: "POST",
+                body: formData,
+            });
+            if (!res.ok) {
+                const err = await res.json();
+                throw new Error(err.detail || `HTTP ${res.status}`);
+            }
+            const data = await res.json();
+            vecA = data.image_embedding;
+            vecB = data.text_embedding;
+            if (data.model_info && data.model_info.backend) {
+                backendName = data.model_info.backend.toUpperCase();
+            }
+        } else if (typeA === "text" && typeB === "image") {
+            const formData = new FormData();
+            formData.append("file", fileB);
+            formData.append("text", textA);
+
+            const res = await fetch("/api/v1/debug/embed", {
+                method: "POST",
+                body: formData,
+            });
+            if (!res.ok) {
+                const err = await res.json();
+                throw new Error(err.detail || `HTTP ${res.status}`);
+            }
+            const data = await res.json();
+            vecA = data.text_embedding;
+            vecB = data.image_embedding;
+            if (data.model_info && data.model_info.backend) {
+                backendName = data.model_info.backend.toUpperCase();
+            }
+        } else {
+            // Text vs Text or Image vs Image: fetch separately
+            const [resA, resB] = await Promise.all([
+                fetchEmbed(typeA, fileA, textA),
+                fetchEmbed(typeB, fileB, textB),
+            ]);
+            vecA = resA.vec;
+            vecB = resB.vec;
+            if (resA.backend) backendName = resA.backend.toUpperCase();
+        }
+
+        const endTime = performance.now();
+        const latencyMs = Math.round(endTime - startTime);
+
+        // Compute exact dot product of normalized vectors
+        const sim = dotProduct(vecA, vecB);
+        const simFormatted = (sim >= 0 ? "+" : "") + sim.toFixed(4);
+
+        scoreVal.textContent = simFormatted;
+        latencyEl.textContent = `${latencyMs} ms`;
+        backendEl.textContent = backendName;
+
+        // Interpret score on SigLIP 2 scale
+        if (sim >= 0.08) {
+            scoreVal.style.color = "#10b981"; // Emerald green
+            statusBadge.className = "badge badge-success";
+            statusBadge.textContent = "🟢 Strong Match";
+            interp.textContent = "High semantic alignment. Concepts are closely bound.";
+            interp.style.color = "#10b981";
+        } else if (sim >= 0.03) {
+            scoreVal.style.color = "#f59e0b"; // Amber
+            statusBadge.className = "badge badge-accent";
+            statusBadge.textContent = "🟡 Moderate Match";
+            interp.textContent = "Partial semantic relation or broad background context.";
+            interp.style.color = "#f59e0b";
+        } else if (sim >= 0.0) {
+            scoreVal.style.color = "var(--text-secondary)";
+            statusBadge.className = "badge badge-muted";
+            statusBadge.textContent = "⚪️ Weak / Neutral";
+            interp.textContent = "Low correlation between targets.";
+            interp.style.color = "var(--text-muted)";
+        } else {
+            scoreVal.style.color = "#ef4444"; // Red
+            statusBadge.className = "badge badge-muted";
+            statusBadge.textContent = "🔴 Distractor / Negative";
+            interp.textContent = "Semantic contradiction or unrelated concepts.";
+            interp.style.color = "#ef4444";
+        }
+
+        // Animate gauge fill: scale [-0.15, +0.15] to [0%, 100%]
+        const minScale = -0.15;
+        const maxScale = 0.15;
+        const clamped = Math.max(minScale, Math.min(maxScale, sim));
+        const pct = ((clamped - minScale) / (maxScale - minScale)) * 100;
+
+        if (sim >= 0) {
+            const startPct = 50;
+            gaugeFill.style.left = `${startPct}%`;
+            gaugeFill.style.width = `${Math.max(2, pct - startPct)}%`;
+            gaugeFill.style.background = sim >= 0.08 ? "#10b981" : "#f59e0b";
+        } else {
+            gaugeFill.style.left = `${pct}%`;
+            gaugeFill.style.width = `${50 - pct}%`;
+            gaugeFill.style.background = "#ef4444";
+        }
+    } catch (err) {
+        console.error("Similarity calculation error:", err);
+        scoreVal.textContent = "ERR";
+        statusBadge.className = "badge badge-muted";
+        statusBadge.textContent = "Calculation Failed";
+        interp.textContent = err.message;
+        interp.style.color = "#ef4444";
+    } finally {
+        btnCalc.disabled = false;
+        btnCalc.textContent = "⚡ Calculate Semantic Similarity";
+    }
+}
+
+async function fetchEmbed(type, file, text) {
+    const formData = new FormData();
+    if (type === "image" && file) {
+        formData.append("file", file);
+    } else if (type === "text" && text) {
+        formData.append("text", text);
+    }
+
+    const res = await fetch("/api/v1/debug/embed", {
+        method: "POST",
+        body: formData,
+    });
+    if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.detail || `HTTP ${res.status}`);
+    }
+    const data = await res.json();
+    return {
+        vec: type === "image" ? data.image_embedding : data.text_embedding,
+        backend: data.model_info ? data.model_info.backend : "mlx",
+    };
+}
+
+function dotProduct(a, b) {
+    if (!a || !b || a.length !== b.length) return 0;
+    let dot = 0;
+    for (let i = 0; i < a.length; i++) {
+        dot += a[i] * b[i];
+    }
+    return dot;
+}
+

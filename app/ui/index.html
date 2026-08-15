@@ -46,6 +46,7 @@
             <!-- Navigation Tabs -->
             <nav class="nav-tabs">
                 <button class="tab-btn active" data-tab="pipeline">🚀 Pipeline Control</button>
+                <button class="tab-btn" data-tab="playground">🧪 Semantic Playground</button>
                 <button class="tab-btn" data-tab="health">⚡ System & Hardware</button>
                 <button class="tab-btn" data-tab="config">⚙️ Configuration</button>
                 <button class="tab-btn" data-tab="data">📁 Data Browser</button>
@@ -165,6 +166,180 @@
                                 <div class="step-content">
                                     <h3>3. Local Vector Indexing</h3>
                                     <p>Qdrant vector collection with SQLite crash-safe state checkpointing.</p>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Tab: Semantic Embedding Playground -->
+            <section class="tab-pane" id="pane-playground">
+                <div class="playground-layout">
+                    <!-- Top Control Header -->
+                    <div class="card glass-card" style="margin-bottom: 20px;">
+                        <div class="card-header">
+                            <div>
+                                <h2>🧪 Live Semantic Similarity Playground</h2>
+                                <p class="card-desc" style="margin-top: 4px;">
+                                    Test custom photos and natural language queries in real-time using native Apple Silicon SigLIP 2 embeddings.
+                                </p>
+                            </div>
+                            <button type="button" class="btn btn-secondary btn-sm" id="btnResetPlayground">🔄 Clear All</button>
+                        </div>
+                    </div>
+
+                    <!-- Comparison Dual Pane -->
+                    <div class="grid-2col" style="margin-bottom: 20px;">
+                        <!-- Target A Pane -->
+                        <div class="card glass-card target-card" id="cardTargetA">
+                            <div class="card-header">
+                                <div style="display: flex; align-items: center; gap: 8px;">
+                                    <span class="badge badge-accent">Target A</span>
+                                    <h3 style="font-size: 16px; margin: 0;">Primary Input</h3>
+                                </div>
+                                <div class="toggle-group">
+                                    <button type="button" class="toggle-btn active" data-target="A" data-type="image">📸 Image</button>
+                                    <button type="button" class="toggle-btn" data-target="A" data-type="text">✍️ Text</button>
+                                </div>
+                            </div>
+
+                            <!-- Target A Image Dropzone -->
+                            <div class="dropzone-container" id="dropzoneA">
+                                <input type="file" id="fileInputA" accept="image/*,.heic,.jpg,.jpeg,.png,.webp,.avif" style="display: none;">
+                                <div class="dropzone" id="dropAreaA" tabindex="0">
+                                    <div class="dropzone-placeholder" id="placeholderA">
+                                        <div class="dropzone-icon">🖼️</div>
+                                        <p class="dropzone-text"><strong>Drag & Drop</strong> image here</p>
+                                        <p class="dropzone-subtext">or click to browse • or press <kbd>⌘V</kbd> to paste screenshot</p>
+                                    </div>
+                                    <div class="dropzone-preview" id="previewContainerA" style="display: none;">
+                                        <img id="previewImgA" src="" alt="Target A Preview">
+                                        <button type="button" class="btn-clear-preview" id="btnClearImgA" title="Remove image">✕</button>
+                                        <div class="preview-meta" id="previewMetaA">--</div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- Target A Text Area -->
+                            <div class="text-input-container" id="textContainerA" style="display: none;">
+                                <label for="textInputA" style="font-size: 13px; font-weight: 500; margin-bottom: 6px; display: block;">Text Prompt</label>
+                                <textarea id="textInputA" class="input-textarea" rows="4" placeholder="e.g. a snowy mountain peak summit on a sunny day"></textarea>
+                                <div class="quick-chips">
+                                    <span class="chip" data-target="A">🏔️ snowy mountain</span>
+                                    <span class="chip" data-target="A">🏖️ tropical beach</span>
+                                    <span class="chip" data-target="A">🍕 delicious pizza</span>
+                                    <span class="chip" data-target="A">🐶 playful dog</span>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Target B Pane -->
+                        <div class="card glass-card target-card" id="cardTargetB">
+                            <div class="card-header">
+                                <div style="display: flex; align-items: center; gap: 8px;">
+                                    <span class="badge badge-accent">Target B</span>
+                                    <h3 style="font-size: 16px; margin: 0;">Comparison Target</h3>
+                                </div>
+                                <div class="toggle-group">
+                                    <button type="button" class="toggle-btn" data-target="B" data-type="image">📸 Image</button>
+                                    <button type="button" class="toggle-btn active" data-target="B" data-type="text">✍️ Text</button>
+                                </div>
+                            </div>
+
+                            <!-- Target B Image Dropzone -->
+                            <div class="dropzone-container" id="dropzoneB" style="display: none;">
+                                <input type="file" id="fileInputB" accept="image/*,.heic,.jpg,.jpeg,.png,.webp,.avif" style="display: none;">
+                                <div class="dropzone" id="dropAreaB" tabindex="0">
+                                    <div class="dropzone-placeholder" id="placeholderB">
+                                        <div class="dropzone-icon">🖼️</div>
+                                        <p class="dropzone-text"><strong>Drag & Drop</strong> image here</p>
+                                        <p class="dropzone-subtext">or click to browse • or press <kbd>⌘V</kbd> to paste screenshot</p>
+                                    </div>
+                                    <div class="dropzone-preview" id="previewContainerB" style="display: none;">
+                                        <img id="previewImgB" src="" alt="Target B Preview">
+                                        <button type="button" class="btn-clear-preview" id="btnClearImgB" title="Remove image">✕</button>
+                                        <div class="preview-meta" id="previewMetaB">--</div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- Target B Text Area -->
+                            <div class="text-input-container" id="textContainerB">
+                                <label for="textInputB" style="font-size: 13px; font-weight: 500; margin-bottom: 6px; display: block;">Text Prompt</label>
+                                <textarea id="textInputB" class="input-textarea" rows="4" placeholder="e.g. a snowy mountain peak summit with blue sky"></textarea>
+                                <div class="quick-chips">
+                                    <span class="chip" data-target="B">🏔️ snowy mountain</span>
+                                    <span class="chip" data-target="B">🏖️ sunny beach</span>
+                                    <span class="chip" data-target="B">🍕 freshly baked pizza</span>
+                                    <span class="chip" data-target="B">🐶 playful dog</span>
+                                    <span class="chip" data-target="B">🎉 birthday cake</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Action Bar -->
+                    <div style="display: flex; justify-content: center; margin-bottom: 24px;">
+                        <button type="button" class="btn btn-primary btn-lg" id="btnCalculateSimilarity" style="min-width: 280px; font-size: 16px; padding: 14px 28px;">
+                            ⚡ Calculate Semantic Similarity
+                        </button>
+                    </div>
+
+                    <!-- Results Section -->
+                    <div class="card glass-card result-panel" id="resultPanel" style="display: none; margin-bottom: 24px;">
+                        <div class="card-header">
+                            <h2>📊 Semantic Alignment Result</h2>
+                            <span class="badge" id="resultStatusBadge">Calculating...</span>
+                        </div>
+
+                        <div class="result-display-grid">
+                            <!-- Main Score Metric -->
+                            <div class="result-metric-card">
+                                <div class="metric-label">Cosine Similarity (Dot Product)</div>
+                                <div class="metric-score" id="resultScoreValue">0.0000</div>
+                                <div class="metric-sub" id="resultInterpretation">--</div>
+                            </div>
+
+                            <!-- Visual Alignment Gauge Bar -->
+                            <div class="result-gauge-card">
+                                <div style="display: flex; justify-content: space-between; font-size: 12px; margin-bottom: 6px;">
+                                    <span style="color: var(--text-muted);">-0.10 (Mismatch)</span>
+                                    <span style="color: var(--text-muted);">0.00 (Neutral)</span>
+                                    <span style="color: #10b981; font-weight: 600;">+0.15 (Strong Match)</span>
+                                </div>
+                                <div class="gauge-bar-bg">
+                                    <div class="gauge-center-mark"></div>
+                                    <div class="gauge-bar-fill" id="gaugeBarFill" style="width: 50%; left: 50%;"></div>
+                                </div>
+                                <div class="gauge-details" id="gaugeDetails" style="font-size: 12px; color: var(--text-muted); margin-top: 10px;">
+                                    Latency: <span id="calcLatency">-- ms</span> • Backend: <span id="calcBackend">Apple MLX</span> • Dimensions: 768-dim L2 Unit Vector
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Educational / Diagnostic Guide Box -->
+                    <div class="card glass-card" style="border-left: 4px solid var(--accent-color);">
+                        <div class="card-header">
+                            <h3 style="font-size: 15px; margin: 0;">💡 Understanding SigLIP 2 Similarity Scores</h3>
+                        </div>
+                        <div style="font-size: 13px; line-height: 1.6; color: var(--text-muted);">
+                            <p style="margin-bottom: 8px;">
+                                <strong>Algorithm:</strong> Cosine Similarity between two 768-dimensional L2-normalized float32 vectors: <code>similarity = Vector_A • Vector_B</code>.
+                            </p>
+                            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; margin-top: 10px;">
+                                <div style="background: rgba(16, 185, 129, 0.1); border: 1px solid rgba(16, 185, 129, 0.25); border-radius: 8px; padding: 10px;">
+                                    <strong style="color: #10b981;">🟢 Strong Match (+0.08 to +0.20+)</strong>
+                                    <p style="font-size: 12px; margin-top: 4px; color: var(--text-color);">Clear semantic alignment. The image content strongly reflects the prompt concept.</p>
+                                </div>
+                                <div style="background: rgba(245, 158, 11, 0.1); border: 1px solid rgba(245, 158, 11, 0.25); border-radius: 8px; padding: 10px;">
+                                    <strong style="color: #f59e0b;">🟡 Moderate / Context (+0.03 to +0.08)</strong>
+                                    <p style="font-size: 12px; margin-top: 4px; color: var(--text-color);">Weak or partial match (e.g., outdoor landscape vs. specific hiking activity).</p>
+                                </div>
+                                <div style="background: rgba(239, 68, 68, 0.1); border: 1px solid rgba(239, 68, 68, 0.25); border-radius: 8px; padding: 10px;">
+                                    <strong style="color: #ef4444;">🔴 Distractor / Negative (&lt; 0.00)</strong>
+                                    <p style="font-size: 12px; margin-top: 4px; color: var(--text-color);">Semantic contradiction or unrelated concepts (e.g. snowy mountains vs. beach).</p>
                                 </div>
                             </div>
                         </div>
