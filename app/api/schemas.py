@@ -81,6 +81,7 @@ class DataDirResponse(BaseModel):
 
 class ScanRequest(BaseModel):
     corpus_path: str = Field(..., description="Absolute path to media folder to scan")
+    workspace_path: Optional[str] = Field(default=None, description="Absolute path for project workspace directory")
     force_reindex: bool = Field(default=False, description="Whether to bypass fast hash cache")
 
 
@@ -111,6 +112,7 @@ class ScanResponse(BaseModel):
 
 class GenerateRequest(BaseModel):
     corpus_path: str = Field(..., description="Absolute path to media folder on the local machine")
+    workspace_path: Optional[str] = Field(default=None, description="Absolute path for project workspace directory")
     prompt: str = Field(..., min_length=1, description="Natural language search prompt describing the moment")
     target_duration_seconds: int = Field(default=60, ge=5, le=300, description="Target duration of highlight video in seconds")
     aspect_ratio: Literal["1:1", "16:9", "9:16"] = Field(default="1:1", description="Target video aspect ratio")
