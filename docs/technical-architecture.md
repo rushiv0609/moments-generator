@@ -1,7 +1,7 @@
 # Technical Architecture: Local AI Moments Generator
 
-**Version:** 1.0  
-**Status:** Finalised  
+**Version:** 1.1  
+**Status:** Finalised (updated with benchmark-proven architecture)  
 **Last Updated:** 2026-08-15  
 **Reference:** [Product Requirements Document](file:///Users/rushivyas/development/projects/moments-generator/docs/product-requirements.md)
 
@@ -19,10 +19,10 @@ The application follows a **Decoupled Hybrid Architecture** designed to extract 
 │  │  Python Virtual Environment (.venv via uv)                            │  │
 │  │                                                                        │  │
 │  │  ┌───────────────┐  ┌──────────────────┐  ┌────────────────────────┐  │  │
-│  │  │ FastAPI Server │  │ Embedding Engine │  │ FFmpeg Engine          │  │  │
-│  │  │  • REST API    │  │  • SigLIP 2      │  │  • Frame extraction   │  │  │
-│  │  │  • SSE Stream  │  │  • MLX / PyTorch │  │  • Rendering          │  │  │
-│  │  │  • Static UI   │  │  • GPU batched   │  │  • HW accel           │  │  │
+│  │  │ FastAPI Server │  │ Embedding Engine │  │ Media Decode Engine    │  │  │
+│  │  │  • REST API    │  │  • SigLIP 2      │  │  • ImageIO (photos)    │  │  │
+│  │  │  • SSE Stream  │  │  • MLX / PyTorch │  │  • AVFoundation (vid)  │  │  │
+│  │  │  • Static UI   │  │  • GPU batched   │  │  • FFmpeg (render)     │  │  │
 │  │  └───────┬────────┘  └────────┬─────────┘  └──────────┬─────────────┘  │  │
 │  │          │                    │                        │                │  │
 │  │  ┌───────┴────────────────────┴────────────────────────┴─────────────┐  │  │
@@ -84,7 +84,7 @@ The application follows a **Decoupled Hybrid Architecture** designed to extract 
 | **Type** | Vision-Text encoder (shared embedding space) |
 | **Model input resolution** | 224×224 (base) / 384×384 (so400m) |
 | **Embedding dimension** | 768 (base) / 1152 (so400m) |
-| **Precision** | Float16 (`fp16`) |
+| **Precision** | Float16 (`fp16`) — default; 8-bit quantized available (see §2.6) |
 
 > **⚠️ Critical: Two Different Resolutions in the System**
 >
@@ -138,7 +138,25 @@ The embedder uses a **strategy pattern** with automatic fallback:
 
 - The model is loaded **once** at FastAPI application startup via a singleton manager.
 - Weights are held in unified memory for the lifetime of the process.
-- Estimated memory for `siglip2-base-patch16-224` in fp16: **~350 MB**.
+- **Measured memory** for `siglip2-base-patch16-224`:
+  - FP16: **~860 MB** (MPS allocated: 771 MB + Python overhead).
+  - 8-bit Quantized (MLX): **~440 MB** — 50% reduction with zero accuracy loss.
+
+### 2.6 8-Bit Quantization Strategy (MLX Only)
+
+The MLX backend supports loading 8-bit quantized weights from `mlx-community/siglip2-base-patch16-224-8bit`.
+
+| Metric | FP16 | 8-Bit Quantized | Impact |
+|---|---|---|---|
+| Model RAM | ~860 MB | ~440 MB | **50% reduction** |
+| Cosine similarity vs FP16 reference | 1.000000 | 1.000000 | **Zero loss** |
+| Mean Squared Error vs FP16 | 0.0 | 3.58e-07 | Negligible |
+| Batch 32 throughput | 448 img/s | 388 img/s | -13% (still I/O-bound) |
+| 1,000 photo ingestion wall time | 50.52s | 50.02s | Identical (I/O-bound) |
+
+**When to use 8-bit:** When processing very large corpora (50K+ files) where model RAM competes with OS file cache. Since the pipeline is I/O-bound, the slight GPU throughput reduction has zero impact on wall-clock time.
+
+**Startup logic:** Controlled by `MODEL_PRECISION` config (`"fp16"` or `"8bit"`). When `"8bit"` is selected and the MLX backend is active, weights are loaded from the quantized checkpoint. Falls back to FP16 if quantized weights are unavailable.
 
 ---
 
@@ -290,16 +308,18 @@ This ensures metadata extraction (which is expensive for videos) is never wasted
 ### 4.1 Architecture
 
 ```
-┌───────────┐    file_queue     ┌──────────────────┐   frame_queue    ┌───────────────┐   vector_queue   ┌─────────────┐
-│  Scanner  │ ═══════════════▶  │  Frame Extractor │ ═══════════════▶ │   Embedder    │ ═══════════════▶ │   Indexer   │
-│ 1 thread  │                   │  N threads       │                  │ 1 thread      │                  │ 1 thread    │
-│           │                   │  (ThreadPool)    │                  │ GPU batched   │                  │ batch upsert│
-└───────────┘                   └──────────────────┘                  └───────────────┘                  └─────────────┘
-      │                                │                                    │                                  │
-      └────────────────────────────────┴────────────────────────────────────┴──────────────────────────────────┘
-                                                        │
-                                              Manifest DB (SQLite)
-                                         (status updated after each stage)
+                                                             raw_frame_queue                                              vector_queue
+ file_queue        +-----------------------------+   (224x224 uint8 numpy)    +--------------------------------+    (768-dim fp16)     +-----------+
++---------+  ====> | Media Decoder               | ========================> | GPU Consumer                   | ===================> | Indexer   |
+| Scanner |        | 12 threads (ThreadPool)      |                           | 1 thread, MLX JIT-compiled     |                      | 1 thread  |
+| 1 thread|        | ImageIO (photos)             |                           | Transform -> Embed -> L2 Norm  |                      | batch     |
+|         |        | AVFoundation/OpenCV (videos) |                           | @mx.compile kernel fusion      |                      | upsert    |
++---------+        +-----------------------------+                           +--------------------------------+                      +-----------+
+     |                        |                                                        |                                                  |
+     +------------------------+--------------------------------------------------------+--------------------------------------------------+
+                                                              |
+                                                    Manifest DB (SQLite)
+                                               (status updated after each stage)
 ```
 
 ### 4.2 Queue Design
@@ -309,7 +329,7 @@ All inter-stage communication uses **bounded queues** to enforce backpressure. I
 | Queue | Capacity | Item Type | Rationale |
 |---|---|---|---|
 | `file_queue` | 64 | `MediaFile` objects | Scanner is very fast; small buffer is enough |
-| `frame_queue` | 256 | `(file_id, frame_index, pixel_array)` | At 224×224×3 fp16 ≈ 75 KB/frame → ~19 MB max |
+| `raw_frame_queue` | 256 | `(file_id, frame_index, uint8_numpy_224x224)` | At 224×224×3 uint8 ≈ 150 KB/frame → ~38 MB max |
 | `vector_queue` | 512 | `(file_id, frame_index, embedding_vector)` | At 768 × fp16 ≈ 1.5 KB/vector → <1 MB max |
 
 ### 4.3 Stage Details
@@ -318,26 +338,36 @@ All inter-stage communication uses **bounded queues** to enforce backpressure. I
 - Walks the corpus directory recursively.
 - For each supported file: compute `xxhash64(path + size + mtime)`.
 - Check manifest for skip/resume decision.
-- Extract metadata (EXIF, ffprobe, fs stat).
+- Extract metadata (EXIF, exifread, fs stat).
 - Update manifest to `SCANNED`.
 - Push to `file_queue`.
 
-#### Stage 2: Frame Extractor (N threads, default 4)
-- `ThreadPoolExecutor` pulls from `file_queue`.
-- **For images:** Decode with Pillow (or `pillow-heif` for HEIC), resize to 224×224, push pixel array to `frame_queue`.
-- **For videos:** Run FFmpeg subprocess to extract frames at 1 FPS, stream directly to memory via `pipe:1`:
-  ```bash
-  ffmpeg -hwaccel videotoolbox -i input.mp4 \
-    -vf "fps=1,scale=224:224:force_original_aspect_ratio=increase,crop=224:224" \
-    -f image2pipe -pix_fmt rgb24 -vcodec rawvideo pipe:1
-  ```
+#### Stage 2: Media Decoder (12 threads, ThreadPool)
+- `ThreadPoolExecutor` with 12 workers pulls from `file_queue`.
+- **For images (primary — Apple ImageIO via PyObjC):**
+  - Uses `CGImageSourceCreateThumbnailAtIndex` with `kCGImageSourceThumbnailMaxPixelSize=224`.
+  - Hardware-accelerated HEIC/JPEG/PNG decompression directly to a 224×224 thumbnail in a single native call.
+  - Avoids full 48MP decompression → resize overhead that Pillow/pillow-heif would incur.
+  - Push uint8 numpy array (224×224×3) to `raw_frame_queue`.
+- **For images (fallback — Pillow):**
+  - If ImageIO unavailable (non-macOS), fall back to `Pillow` + `pillow-heif` for HEIC.
+- **For videos (primary — OpenCV + AVFoundation):**
+  - Uses `cv2.VideoCapture` with `CAP_AVFOUNDATION` backend for native Apple VideoToolbox hardware decoding.
+  - Extracts frames at 1 FPS, resizes to 224×224 in-process.
+  - No subprocess, no pipe buffering, no FFmpeg binary dependency for extraction.
+  - Measured: 22.6 frames/second extraction throughput.
+- **For videos (fallback — FFmpeg subprocess):**
+  - If OpenCV/AVFoundation unavailable, fall back to FFmpeg subprocess with `videotoolbox` hwaccel.
 - Update manifest to `EXTRACTED` after all frames for a file are pushed.
-- **Error handling:** If FFmpeg fails on a file, mark as `ERROR` in manifest, log warning, continue.
+- **Error handling:** If decoding fails on a file, mark as `ERROR` in manifest, log warning, continue.
 
-#### Stage 3: Embedder (1 thread, GPU-batched)
-- Pulls frames from `frame_queue`, accumulates a batch of `EMBED_BATCH_SIZE` (default 32).
-- Passes batch through SigLIP 2 vision encoder → N × 768-dim vectors.
-- L2-normalises each vector.
+#### Stage 3: GPU Consumer (1 thread, MLX JIT-compiled)
+- Pulls raw frames from `raw_frame_queue`, accumulates a batch of `EMBED_BATCH_SIZE` (default 64).
+- **Fused GPU pipeline** (all steps run on Apple Silicon GPU in one `@mx.compile` pass):
+  1. Convert uint8 numpy → MLX float16 tensor.
+  2. Normalize: `(x / 255.0 - 0.5) / 0.5`.
+  3. Forward pass through SigLIP 2 vision encoder → N × 768-dim vectors.
+  4. L2-normalise each vector.
 - Pushes `(file_id, frame_index, vector)` tuples to `vector_queue`.
 - When all frames for a file have been embedded, update manifest to `EMBEDDED`.
 
@@ -357,21 +387,42 @@ All inter-stage communication uses **bounded queues** to enforce backpressure. I
 
 ### 4.4 Empirical Performance & Hardware Acceleration
 
-Based on benchmark telemetry on 1,000 real photos (predominantly 48MP iPhone HEIC and standard JPEG), the ingestion pipeline performance bottlenecks and optimal architecture are well-defined:
+Based on comprehensive benchmark telemetry across all three modalities — text, photos (1,000 real 48MP iPhone HEIC/JPEG), and videos (25 real clips, 283 frames) — the ingestion pipeline bottlenecks and optimal architecture are well-defined.
 
-**Pipeline Architecture Confirmed:**
-- **Component B (Apple ImageIO Hardware Acceleration):** File decompression is the dominant bottleneck. Using native Apple `ImageIO` (`CGImageSourceCreateThumbnailAtIndex`) via PyObjC allows hardware decompression directly into a 224x224 thumbnail, bypassing full software decompression (e.g., `libheif`).
-- **Component C (Asynchronous Double-Buffered Pipeline):** 12 CPU worker threads continuously decode and push into a bounded memory queue (`frame_queue`), while the Apple Silicon GPU asynchronously pulls batches for computation.
+> All benchmark data was collected on Apple Silicon M5 Pro with PyTorch 2.13.0 and MLX. Full reports are in [`data/benchmarks/`](file:///Users/rushivyas/development/projects/moments-generator/data/benchmarks). Benchmark suite documentation is in [`docs/benchmarking.md`](file:///Users/rushivyas/development/projects/moments-generator/docs/benchmarking.md).
 
 **Stage-by-Stage Telemetry Breakdown (1,000 Photos):**
 | Pipeline Stage | Time Spent | % of Total Time | Notes |
 | :--- | :--- | :--- | :--- |
-| **1. File Decompression (I/O + Decode)** | ~39.5s (Wall) | **92.5%** | Across 12 CPU worker threads. Decompressing HEIC is the heaviest step. |
-| **2. Image Transformation (Crop/Norm)** | ~0.36s | **< 1%** | Negligible. Best performed on GPU via Metal Shaders. |
-| **3. GPU Neural Network Forward Pass** | ~3.0s | **6.5%** | SigLIP 2 Vision Tower on Apple Silicon MPS processes ~350 images/second. |
-| **4. GPU L2 Vector Normalization** | <0.01s | **< 0.1%** | Negligible. |
+| **1. File Decompression (I/O + Decode)** | ~47.0s (Wall) | **92.5%** | Across 12 CPU worker threads via Apple ImageIO. Decompressing HEIC is the heaviest step. |
+| **2. GPU Transform + Embed + L2 Norm** | ~2.6s | **5.2%** | MLX JIT-compiled fused pass. SigLIP 2 at ~470 img/s (batch 32+). |
+| **3. Qdrant Upsert** | ~0.4s | **<1%** | Batch upsert is negligible. |
+| **4. Overhead (scheduling, queues)** | ~0.5s | **~1%** | Python threading overhead. |
 
-**Key Takeaway:** The GPU (consumer) at ~350 fps is much faster than the CPU decompression (producer) at ~20-60 fps. This means the GPU spends most of its time idle, keeping laptop thermals cool and fan noise minimal. Using GPU transforms (Step 2) makes sense as the tensor is already heading to the GPU, avoiding CPU overhead.
+**Multi-Modal Throughput Summary:**
+| Modality | Engine | Throughput | Wall Time (sample) |
+|---|---|---|---|
+| **Text Search** | MLX FP16 (fused) | **968 queries/s** (1.02 ms/query) | — |
+| **Text Search** | PyTorch MPS | 538 queries/s (1.86 ms/query) | — |
+| **Photo Ingestion** | MLX FP16 (12 decode threads) | **19.7 photos/s** | 50.0s / 1,000 photos |
+| **Photo Ingestion** | MLX 8-bit (12 decode threads) | **19.8 photos/s** | 50.0s / 1,000 photos |
+| **Video Ingestion** | MLX FP16 + AVFoundation | **16.3 frames/s** | 17.3s / 283 frames (25 clips) |
+
+**Pure GPU Forward Pass Throughput (no I/O — synthetic benchmark):**
+| Batch Size | PyTorch MPS (FP16) | MLX FP16 (Fused) | MLX 8-Bit (Fused) |
+|---|---|---|---|
+| 1 | 282 img/s | 280 img/s | 107 img/s |
+| 16 | 353 img/s | 466 img/s (+32%) | 405 img/s |
+| 32 | 356 img/s | 470 img/s (+32%) | 420 img/s |
+| 64 | 359 img/s | 466 img/s (+30%) | 421 img/s |
+
+**Key Takeaways:**
+1. The pipeline is **entirely I/O-bound** (92.5% decompression). GPU upgrade or model optimisation has near-zero impact on wall-clock time.
+2. MLX `@mx.compile` kernel fusion provides **~30% GPU throughput gain** over PyTorch MPS at batch 16+.
+3. At batch=1, PyTorch MPS matches MLX due to CPU dispatch overhead dominating. Batching is essential.
+4. 8-bit quantization has **zero accuracy loss** (cosine similarity 1.000000) with 50% model RAM reduction.
+5. The GPU at ~470 fps is starved by 12 CPU decode threads producing ~20 fps. GPU utilisation is <5%, keeping thermals cool.
+6. Video extraction at 1 FPS produces ~11 frames per clip on average — useful for estimating Qdrant collection sizes.
 
 ### 4.5 Pipeline Lifecycle
 
@@ -393,28 +444,27 @@ def run_pipeline(corpus_path, force_reindex):
         return
     
     pipeline = IngestionPipeline(
-        extract_workers=config.EXTRACT_WORKERS,   # Default: 4
-        embed_batch_size=config.EMBED_BATCH_SIZE,  # Default: 32
+        extract_workers=config.EXTRACT_WORKERS,   # Default: 12 (benchmark-proven optimal)
+        embed_batch_size=config.EMBED_BATCH_SIZE,  # Default: 64 (GPU saturation sweet spot)
         index_batch_size=config.INDEX_BATCH_SIZE,  # Default: 100
     )
     
     pipeline.run(files, manifest, embedder, qdrant_client)
 ```
 
-### 4.5 Memory Budget
+### 4.6 Memory Budget (Measured)
 
-| Component | Allocation | Notes |
-|---|---|---|
-| SigLIP 2 model weights (fp16) | ~350 MB | Loaded once at startup |
-| FFmpeg subprocesses (4 concurrent) | ~800 MB | ~200 MB RSS each |
-| Frame queue (256 frames @ 75 KB) | ~19 MB | Bounded |
-| Embedding batch (32 frames on GPU) | ~100 MB | Transient |
-| Vector queue (512 vectors @ 1.5 KB) | <1 MB | Bounded |
-| Qdrant client buffers | ~50 MB | Batch upserts |
-| Python runtime + FastAPI | ~200 MB | Baseline |
-| **Total peak** | **~1.5 GB** | Comfortable on 18+ GB unified memory |
+| Component | FP16 Mode | 8-Bit Mode | Notes |
+|---|---|---|---|
+| SigLIP 2 model weights | **~860 MB** | **~440 MB** | Loaded once at startup into unified memory |
+| Raw frame queue (256 frames @ 150 KB) | ~38 MB | ~38 MB | Bounded uint8 numpy arrays |
+| Embedding batch (64 frames on GPU) | ~50 MB | ~50 MB | Transient, freed after forward pass |
+| Vector queue (512 vectors @ 1.5 KB) | <1 MB | <1 MB | Bounded |
+| Qdrant client buffers | ~50 MB | ~50 MB | Batch upserts |
+| Python runtime + FastAPI | ~200 MB | ~200 MB | Baseline |
+| **Total peak (measured)** | **~1,200 MB** | **~780 MB** | Comfortable on 18+ GB unified memory |
 
-> Note: The earlier estimate of 4-5 GB was conservative. With proper bounded queues and streaming, actual usage is lower. Qdrant runs separately in Docker with its own memory cap (recommend 2 GB `mem_limit`).
+> Note: Measured via `psutil.Process().memory_info().rss` during 1,000-photo ingestion. Qdrant runs separately in Docker with its own memory cap (recommend 2 GB `mem_limit`). No FFmpeg subprocesses are needed for extraction (OpenCV + AVFoundation is in-process).
 
 ---
 
@@ -637,10 +687,11 @@ class Settings(BaseSettings):
     # Model
     MODEL_NAME: str = "google/siglip2-base-patch16-224"
     MODEL_BACKEND: str = "auto"  # "auto" | "mlx" | "pytorch_mps"
-    EMBED_BATCH_SIZE: int = 32
+    MODEL_PRECISION: str = "fp16"  # "fp16" | "8bit" (MLX only)
+    EMBED_BATCH_SIZE: int = 64  # Benchmark-proven GPU saturation sweet spot
 
     # Pipeline
-    EXTRACT_WORKERS: int = 4
+    EXTRACT_WORKERS: int = 12  # Benchmark-proven optimal for I/O-bound HEIC decode
     INDEX_BATCH_SIZE: int = 100
     FILE_QUEUE_SIZE: int = 64
     FRAME_QUEUE_SIZE: int = 256
@@ -713,8 +764,9 @@ echo "=== Initializing Local AI Moments Generator ==="
 
 # ── 1. Dependency Validation ──
 command -v python3 >/dev/null 2>&1 || { echo "Error: Python3 is required."; exit 1; }
-command -v ffmpeg  >/dev/null 2>&1 || { echo "Error: FFmpeg is required. Install with 'brew install ffmpeg'."; exit 1; }
 command -v docker  >/dev/null 2>&1 || { echo "Error: Docker is required."; exit 1; }
+# FFmpeg is optional for extraction (OpenCV + AVFoundation is used), but required for rendering
+command -v ffmpeg  >/dev/null 2>&1 || echo "Warning: FFmpeg not found. Rendering will not work. Install with 'brew install ffmpeg'."
 
 # ── 2. Install uv if needed ──
 if ! command -v uv >/dev/null 2>&1; then
@@ -762,15 +814,19 @@ exec uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload
 | `uvicorn[standard]` | ASGI server | Server |
 | `sse-starlette` | Server-Sent Events | Progress streaming |
 | `mlx` | Apple Silicon ML framework | Embedding (primary) |
+| `mlx-lm` | MLX model loading + 8-bit quantization | Embedding (primary) |
 | `transformers` | HuggingFace model loading | Embedding (fallback) |
 | `torch` | PyTorch with MPS backend | Embedding (fallback) |
-| `Pillow` | Image processing | Frame extraction |
-| `pillow-heif` | HEIC/HEIF decoding | iPhone photos |
+| `pyobjc-framework-Quartz` | Apple ImageIO bindings (PyObjC) | Photo decoding (primary) |
+| `opencv-python` | Video frame extraction (AVFoundation) | Video decoding (primary) |
+| `Pillow` | Image processing | Frame extraction (fallback) |
+| `pillow-heif` | HEIC/HEIF decoding | iPhone photos (fallback) |
 | `exifread` | EXIF metadata parsing | Timestamp extraction |
 | `qdrant-client` | Vector database client | Vector search |
 | `pydantic` | Data validation | Schemas, config |
 | `pydantic-settings` | Environment config | Settings |
 | `xxhash` | Fast file hashing | Manifest |
 | `numpy` | Array operations | Embedding pipeline |
-| `ffmpeg` (system) | Media decode/encode | Extraction, rendering |
+| `psutil` | Process memory monitoring | Telemetry, benchmarking |
+| `ffmpeg` (system) | Media encoding/rendering | Rendering only (not extraction) |
 | `docker` (system) | Container runtime | Qdrant |
