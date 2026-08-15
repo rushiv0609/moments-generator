@@ -30,6 +30,20 @@ document.addEventListener("DOMContentLoaded", () => {
         });
     }
 
+    const btnIndexWs = document.getElementById("btnIndexWorkspace");
+    if (btnIndexWs) {
+        btnIndexWs.addEventListener("click", () => {
+            startIndexingJob();
+        });
+    }
+
+    const btnSubmitIdx = document.getElementById("btnSubmitIndex");
+    if (btnSubmitIdx) {
+        btnSubmitIdx.addEventListener("click", () => {
+            startIndexingJob();
+        });
+    }
+
     // Auto-refresh health every 15 seconds
     setInterval(() => {
         fetchHealth(false);
@@ -157,6 +171,187 @@ async function applyWorkspace(showAlert = true) {
         }
     }
 }
+
+/**
+ * Milestone 8: Parallel Ingestion Pipeline Execution & SSE Progress Stream
+ */
+let _activeEventSource = null;
+
+async function startIndexingJob() {
+    const wsInput = document.getElementById("workspacePath");
+    const corpusInput = document.getElementById("corpusPath");
+    const forceReindex = document.getElementById("forceReindex") ? document.getElementById("forceReindex").checked : false;
+
+    const btnIndexWs = document.getElementById("btnIndexWorkspace");
+    const btnSubmitIdx = document.getElementById("btnSubmitIndex");
+    const progressCard = document.getElementById("pipelineProgressCard");
+    const stageBadge = document.getElementById("pipelineStageBadge");
+    const statusText = document.getElementById("pipelineStatusText");
+    const pctText = document.getElementById("pipelinePctText");
+    const progressBar = document.getElementById("pipelineProgressBar");
+    const logTerminal = document.getElementById("pipelineLogTerminal");
+
+    const wsPath = wsInput ? wsInput.value.trim() : null;
+    const corpusPath = corpusInput ? corpusInput.value.trim() : null;
+
+    if (!wsPath) {
+        alert("Please specify or choose a Project Workspace Directory first.");
+        return;
+    }
+
+    if (btnIndexWs) btnIndexWs.disabled = true;
+    if (btnSubmitIdx) btnSubmitIdx.disabled = true;
+
+    // Show live progress card
+    if (progressCard) progressCard.style.display = "block";
+    if (logTerminal) logTerminal.innerHTML = `<div>[${new Date().toLocaleTimeString()}] Submitting background indexing job...</div>`;
+
+    // Close any previous SSE connection
+    if (_activeEventSource) {
+        _activeEventSource.close();
+        _activeEventSource = null;
+    }
+
+    try {
+        const res = await fetch("/api/v1/jobs/index", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                workspace_path: wsPath,
+                corpus_path: corpusPath || null,
+                force_reindex: forceReindex,
+            }),
+        });
+
+        if (!res.ok) {
+            const err = await res.json();
+            throw new Error(err.detail || `HTTP ${res.status}`);
+        }
+
+        const data = await res.json();
+        const jobId = data.job_id;
+        if (logTerminal) {
+            logTerminal.innerHTML += `<div>[${new Date().toLocaleTimeString()}] Job ${jobId} registered. Connecting live SSE stream...</div>`;
+        }
+
+        // Open SSE connection
+        _activeEventSource = new EventSource(`/api/v1/jobs/${jobId}/events`);
+
+        _activeEventSource.onmessage = (event) => {
+            try {
+                const payload = JSON.parse(event.data);
+                updatePipelineUI(payload);
+            } catch (e) {
+                console.debug("SSE Parse notice:", e);
+            }
+        };
+
+        _activeEventSource.addEventListener("progress", (event) => {
+            const payload = JSON.parse(event.data);
+            updatePipelineUI(payload);
+        });
+
+        _activeEventSource.addEventListener("completed", (event) => {
+            const payload = JSON.parse(event.data);
+            updatePipelineUI(payload);
+            if (_activeEventSource) {
+                _activeEventSource.close();
+                _activeEventSource = null;
+            }
+            if (btnIndexWs) btnIndexWs.disabled = false;
+            if (btnSubmitIdx) btnSubmitIdx.disabled = false;
+            fetchWorkspace(false);
+            fetchHealth(true);
+            fetchDataDir();
+        });
+
+        _activeEventSource.addEventListener("error", (event) => {
+            if (_activeEventSource) {
+                _activeEventSource.close();
+                _activeEventSource = null;
+            }
+            if (btnIndexWs) btnIndexWs.disabled = false;
+            if (btnSubmitIdx) btnSubmitIdx.disabled = false;
+            if (stageBadge) {
+                stageBadge.className = "badge badge-danger";
+                stageBadge.textContent = "FAILED";
+            }
+        });
+
+    } catch (err) {
+        alert(`Failed to start indexing job: ${err.message}`);
+        if (btnIndexWs) btnIndexWs.disabled = false;
+        if (btnSubmitIdx) btnSubmitIdx.disabled = false;
+    }
+}
+
+function updatePipelineUI(event) {
+    const stageBadge = document.getElementById("pipelineStageBadge");
+    const statusText = document.getElementById("pipelineStatusText");
+    const pctText = document.getElementById("pipelinePctText");
+    const progressBar = document.getElementById("pipelineProgressBar");
+    const logTerminal = document.getElementById("pipelineLogTerminal");
+    const fpsText = document.getElementById("pipeFps");
+    const countText = document.getElementById("pipeCount");
+    const elapsedText = document.getElementById("pipeElapsed");
+
+    const stage = event.stage || "RUNNING";
+    const pct = event.progress_pct !== undefined ? event.progress_pct : 0.0;
+    const msg = event.message || "";
+
+    if (stageBadge) {
+        stageBadge.textContent = stage;
+        stageBadge.className = stage === "COMPLETED" ? "badge badge-success" : (stage === "FAILED" ? "badge badge-danger" : "badge badge-warning");
+    }
+
+    if (statusText) statusText.textContent = msg;
+    if (pctText) pctText.textContent = `${pct.toFixed(0)}%`;
+    if (progressBar) progressBar.style.width = `${pct}%`;
+
+    // Update Stage Chips
+    const chips = ["step-scan", "step-decode", "step-embed", "step-index"];
+    chips.forEach(c => {
+        const el = document.getElementById(c);
+        if (el) el.style.border = "1px solid transparent";
+    });
+
+    if (stage === "SCANNING") highlightStep("step-scan");
+    else if (stage === "EXTRACTING") highlightStep("step-decode");
+    else if (stage === "EMBEDDING") highlightStep("step-embed");
+    else if (stage === "INDEXING") highlightStep("step-index");
+    else if (stage === "COMPLETED") {
+        chips.forEach(c => {
+            const el = document.getElementById(c);
+            if (el) {
+                el.style.background = "rgba(16, 185, 129, 0.15)";
+                el.style.color = "#10b981";
+            }
+        });
+    }
+
+    if (event.data) {
+        const d = event.data;
+        if (fpsText && d.throughput_fps !== undefined) fpsText.textContent = d.throughput_fps;
+        if (countText && d.processed_count !== undefined && d.total_count !== undefined) countText.textContent = `${d.processed_count} / ${d.total_count}`;
+        if (elapsedText && d.elapsed_seconds !== undefined) elapsedText.textContent = `${d.elapsed_seconds}s`;
+    }
+
+    if (logTerminal && msg) {
+        const line = document.createElement("div");
+        line.textContent = `[${new Date().toLocaleTimeString()}] ${msg}`;
+        logTerminal.appendChild(line);
+        logTerminal.scrollTop = logTerminal.scrollHeight;
+    }
+}
+
+function highlightStep(stepId) {
+    const el = document.getElementById(stepId);
+    if (el) {
+        el.style.border = "1px solid #6366f1";
+        el.style.background = "rgba(99, 102, 241, 0.2)";
+    }
+}
+
 
 
 /**

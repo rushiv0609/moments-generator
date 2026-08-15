@@ -12,6 +12,7 @@ from typing import Dict, Any, Optional, List
 
 import numpy as np
 from fastapi import APIRouter, HTTPException, status, File, Form, UploadFile
+from fastapi.responses import StreamingResponse
 from qdrant_client import QdrantClient
 
 from app.config import get_settings
@@ -31,12 +32,15 @@ from app.api.schemas import (
     FolderPickerResponse,
     SetWorkspaceRequest,
     WorkspaceResponse,
+    IndexJobRequest,
+    IndexJobResponse,
 )
 from app.db.manifest import ManifestDB
 from app.db.qdrant import QdrantVectorDB
 from app.core.embedder import create_embedder, EmbedderInterface
 from app.core.extractor import decode_image
 from app.core.workspace import get_workspace_manager, open_native_finder_picker, WorkspaceManager
+from app.core.jobs import get_job_manager, JobStatus
 
 router = APIRouter()
 
@@ -398,28 +402,100 @@ def scan_media_corpus(request: ScanRequest) -> ScanResponse:
 
 
 # =========================================================================
-# Future Milestone Stubs
+# Milestone 8: Parallel Ingestion Pipeline & Background Worker
+# =========================================================================
+
+@router.post("/jobs/index", response_model=IndexJobResponse)
+def submit_indexing_job(request: Optional[IndexJobRequest] = None) -> IndexJobResponse:
+    """
+    Start an asynchronous background job to decode, embed, and index media
+    files inside the active project workspace.
+    """
+    workspace_mgr = get_workspace_manager()
+    ws_path = request.workspace_path if request and request.workspace_path else (str(workspace_mgr.workspace_path) if workspace_mgr.is_active else None)
+    corpus_p = request.corpus_path if request and request.corpus_path else (str(workspace_mgr.corpus_path) if workspace_mgr.corpus_path else None)
+    force_reidx = request.force_reindex if request else False
+
+    if not ws_path:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="No project workspace specified. Please select a project workspace directory first.",
+        )
+
+    job_mgr = get_job_manager()
+    job = job_mgr.submit_indexing_job(
+        workspace_dir=ws_path,
+        corpus_dir=corpus_p,
+        force_reindex=force_reidx,
+    )
+
+    return IndexJobResponse(
+        job_id=job.id,
+        status=job.status.value,
+        workspace_dir=job.workspace_dir,
+        corpus_dir=job.corpus_dir,
+        message="Background indexing job started.",
+        created_at=job.created_at,
+    )
+
+
+@router.get("/jobs/{job_id}")
+def get_job_status(job_id: str) -> Dict[str, Any]:
+    """
+    Retrieve live progress, status, and telemetry for a background job.
+    """
+    job_mgr = get_job_manager()
+    job = job_mgr.get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Job {job_id} not found.")
+    return job.to_dict()
+
+
+@router.get("/jobs/{job_id}/events")
+async def stream_job_events(job_id: str):
+    """
+    Real-time Server-Sent Events (SSE) stream for live progress bars and telemetry.
+    """
+    job_mgr = get_job_manager()
+    job = job_mgr.get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Job {job_id} not found.")
+
+    return StreamingResponse(
+        job_mgr.subscribe(job_id),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+@router.post("/jobs/{job_id}/cancel")
+def cancel_job(job_id: str) -> Dict[str, Any]:
+    """
+    Cancel an active background job.
+    """
+    job_mgr = get_job_manager()
+    success = job_mgr.cancel_job(job_id)
+    if not success:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Job could not be cancelled.")
+    return {"job_id": job_id, "status": "CANCELLED", "message": "Job cancellation requested."}
+
+
+# =========================================================================
+# Milestone 9 & 10: Curation & Video Rendering Stubs
 # =========================================================================
 
 @router.post("/jobs/generate", response_model=JobResponse, status_code=status.HTTP_501_NOT_IMPLEMENTED)
 def generate_moments_job(request: GenerateRequest):
     """
-    Generate moments video job stub. Implementation scheduled for Milestone 8.
+    Generate moments video job stub. Implementation scheduled for Milestone 9.
     """
     raise HTTPException(
         status_code=status.HTTP_501_NOT_IMPLEMENTED,
-        detail="Pipeline orchestration will be activated in Milestone 8 (Parallel Ingestion Pipeline).",
-    )
-
-
-@router.get("/jobs/{job_id}/events", status_code=status.HTTP_501_NOT_IMPLEMENTED)
-def stream_job_events(job_id: str):
-    """
-    Server-Sent Events progress stream stub. Implementation scheduled for Milestone 8.
-    """
-    raise HTTPException(
-        status_code=status.HTTP_501_NOT_IMPLEMENTED,
-        detail="Real-time SSE event streaming will be activated in Milestone 8.",
+        detail="Video timeline curation will be activated in Milestone 9.",
     )
 
 
@@ -432,3 +508,4 @@ def download_rendered_video(job_id: str):
         status_code=status.HTTP_501_NOT_IMPLEMENTED,
         detail="Rendered video download will be activated in Milestone 10.",
     )
+

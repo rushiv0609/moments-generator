@@ -77,8 +77,8 @@ def test_job_stubs_return_501():
     })
     assert res_gen.status_code == 501
 
-    res_events = client.get("/api/v1/jobs/test-id/events")
-    assert res_events.status_code == 501
+    res_events = client.get("/api/v1/jobs/nonexistent-id/events")
+    assert res_events.status_code == 404
 
     res_dl = client.get("/api/v1/jobs/test-id/download")
     assert res_dl.status_code == 501

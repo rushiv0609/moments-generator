@@ -128,10 +128,27 @@ class JobResponse(BaseModel):
     message: str
 
 
+class IndexJobRequest(BaseModel):
+    workspace_path: Optional[str] = Field(default=None, description="Project workspace directory")
+    corpus_path: Optional[str] = Field(default=None, description="Media folder path to scan & index")
+    force_reindex: bool = Field(default=False, description="Force re-extraction and re-embedding of already indexed files")
+
+
+class IndexJobResponse(BaseModel):
+    job_id: str
+    status: str
+    workspace_dir: str
+    corpus_dir: Optional[str] = None
+    message: str
+    created_at: float
+
+
 class ProgressEvent(BaseModel):
     job_id: str
     stage: Literal["SCANNING", "INDEXING", "CURATING", "RENDERING", "COMPLETED", "FAILED"]
     progress_pct: float = Field(ge=0.0, le=100.0)
     details: str
+    message: Optional[str] = None
+
     eta_seconds: Optional[float] = None
     error: Optional[str] = None
