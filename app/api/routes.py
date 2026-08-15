@@ -27,11 +27,16 @@ from app.api.schemas import (
     ScanRequest,
     ScanResponse,
     ScannedFileItem,
+    FolderPickerRequest,
+    FolderPickerResponse,
+    SetWorkspaceRequest,
+    WorkspaceResponse,
 )
 from app.db.manifest import ManifestDB
 from app.db.qdrant import QdrantVectorDB
 from app.core.embedder import create_embedder, EmbedderInterface
 from app.core.extractor import decode_image
+from app.core.workspace import get_workspace_manager, open_native_finder_picker, WorkspaceManager
 
 router = APIRouter()
 
@@ -135,7 +140,7 @@ def check_model_backend() -> ModelStatus:
 @router.get("/health", response_model=HealthResponse)
 def get_health() -> HealthResponse:
     """
-    System health check. Inspects ML backend, Qdrant connectivity, and FFmpeg installation.
+    System health check. Inspects ML backend, Qdrant connectivity, FFmpeg, and Active Workspace.
     """
     ffmpeg_status = check_ffmpeg()
     qdrant_status = check_qdrant()
@@ -157,13 +162,75 @@ def get_health() -> HealthResponse:
     is_healthy = qdrant_status.connected
     overall_status = "healthy" if is_healthy else "degraded"
 
+    workspace_mgr = get_workspace_manager()
+    workspace_data = None
+    if workspace_mgr.is_active:
+        try:
+            workspace_data = workspace_mgr.get_workspace_info().to_dict()
+        except Exception:
+            workspace_data = None
+
     return HealthResponse(
         status=overall_status,
         model=model_status,
         qdrant=qdrant_status,
         ffmpeg=ffmpeg_status,
         system_memory=mem_info,
+        active_workspace=workspace_data,
     )
+
+
+# =========================================================================
+# Project Workspace Management
+# =========================================================================
+
+@router.post("/workspace/select-folder", response_model=FolderPickerResponse)
+def select_folder_dialog(request: Optional[FolderPickerRequest] = None) -> FolderPickerResponse:
+    """
+    Trigger native macOS Finder folder selection window.
+    """
+    prompt = request.prompt if request and request.prompt else "Select Folder"
+    default_p = request.default_path if request else None
+    chosen = open_native_finder_picker(prompt=prompt, default_path=default_p)
+    return FolderPickerResponse(
+        selected_path=chosen,
+        cancelled=chosen is None,
+    )
+
+
+@router.post("/workspace/set", response_model=WorkspaceResponse)
+def set_active_workspace(request: SetWorkspaceRequest) -> WorkspaceResponse:
+    """
+    Activate a Project Workspace directory. Initializes .moments/ internal structure.
+    """
+    try:
+        workspace_mgr = get_workspace_manager()
+        info = workspace_mgr.set_workspace(
+            workspace_path=request.workspace_path,
+            corpus_path=request.corpus_path,
+        )
+        return WorkspaceResponse(**info.to_dict())
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Failed to activate project workspace: {str(e)}",
+        )
+
+
+@router.get("/workspace/current", response_model=WorkspaceResponse)
+def get_current_workspace() -> WorkspaceResponse:
+    """
+    Retrieve active Project Workspace path, database mappings, and counts.
+    """
+    workspace_mgr = get_workspace_manager()
+    if not workspace_mgr.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No active project workspace set.",
+        )
+    info = workspace_mgr.get_workspace_info()
+    return WorkspaceResponse(**info.to_dict())
+
 
 
 @router.get("/debug/config")
@@ -279,7 +346,12 @@ def scan_media_corpus(request: ScanRequest) -> ScanResponse:
     """
     settings = get_settings()
     try:
-        manifest = ManifestDB.open_or_create(request.corpus_path, data_dir=settings.DATA_DIR)
+        workspace_mgr = get_workspace_manager()
+        if workspace_mgr.is_active:
+            manifest = workspace_mgr.get_manifest_db()
+        else:
+            manifest = ManifestDB.open_or_create(request.corpus_path, data_dir=settings.DATA_DIR)
+
         from app.core.scanner import scan_corpus
         summary = scan_corpus(request.corpus_path, manifest, force_reindex=request.force_reindex)
 

@@ -5,6 +5,7 @@
 document.addEventListener("DOMContentLoaded", () => {
     initTabs();
     initPlayground();
+    initWorkspace();
     fetchHealth();
     fetchConfig();
     fetchDataDir();
@@ -32,8 +33,123 @@ document.addEventListener("DOMContentLoaded", () => {
     // Auto-refresh health every 15 seconds
     setInterval(() => {
         fetchHealth(false);
+        fetchWorkspace(false);
     }, 15000);
 });
+
+/**
+ * Project Workspace Management & Native Finder Integration
+ */
+function initWorkspace() {
+    fetchWorkspace(true);
+
+    const btnBrowseWs = document.getElementById("btnBrowseWorkspace");
+    if (btnBrowseWs) {
+        btnBrowseWs.addEventListener("click", () => {
+            browseFolder("workspacePath", "Choose or Create Project Workspace Folder");
+        });
+    }
+
+    const btnBrowseCorpus = document.getElementById("btnBrowseCorpus");
+    if (btnBrowseCorpus) {
+        btnBrowseCorpus.addEventListener("click", () => {
+            browseFolder("corpusPath", "Choose Source Photos & Videos Folder");
+        });
+    }
+
+    const btnApply = document.getElementById("btnApplyWorkspace");
+    if (btnApply) {
+        btnApply.addEventListener("click", () => {
+            applyWorkspace();
+        });
+    }
+}
+
+async function browseFolder(targetInputId, promptText) {
+    const targetInput = document.getElementById(targetInputId);
+    const currentVal = targetInput ? targetInput.value.trim() : null;
+
+    try {
+        const res = await fetch("/api/v1/workspace/select-folder", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ prompt: promptText, default_path: currentVal || null }),
+        });
+        if (res.ok) {
+            const data = await res.json();
+            if (data.selected_path && targetInput) {
+                targetInput.value = data.selected_path;
+            }
+        }
+    } catch (err) {
+        console.error("Failed to open Finder picker:", err);
+    }
+}
+
+async function fetchWorkspace(updateInputs = false) {
+    try {
+        const res = await fetch("/api/v1/workspace/current");
+        if (res.ok) {
+            const data = await res.json();
+            const wsInput = document.getElementById("workspacePath");
+            const corpusInput = document.getElementById("corpusPath");
+            const indexedCount = document.getElementById("wsIndexedCount");
+            const vectorCount = document.getElementById("wsVectorCount");
+
+            if (updateInputs && wsInput && data.workspace_dir) {
+                wsInput.value = data.workspace_dir;
+            }
+            if (updateInputs && corpusInput && data.corpus_dir) {
+                corpusInput.value = data.corpus_dir;
+            }
+            if (indexedCount) indexedCount.textContent = data.indexed_files;
+            if (vectorCount) vectorCount.textContent = data.total_vectors;
+        }
+    } catch (err) {
+        console.debug("Could not fetch current workspace:", err);
+    }
+}
+
+async function applyWorkspace() {
+    const wsInput = document.getElementById("workspacePath");
+    const corpusInput = document.getElementById("corpusPath");
+    const btnApply = document.getElementById("btnApplyWorkspace");
+
+    if (!wsInput || !wsInput.value.trim()) {
+        alert("Please specify a Project Workspace Directory path.");
+        return;
+    }
+
+    btnApply.disabled = true;
+    btnApply.textContent = "⏳ Activating...";
+
+    try {
+        const res = await fetch("/api/v1/workspace/set", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                workspace_path: wsInput.value.trim(),
+                corpus_path: corpusInput ? corpusInput.value.trim() || null : null,
+            }),
+        });
+
+        if (res.ok) {
+            const data = await res.json();
+            alert(`✅ Project Workspace Activated:\n${data.workspace_dir}`);
+            fetchWorkspace(false);
+            fetchHealth(true);
+        } else {
+            const err = await res.json();
+            alert(`Failed to activate workspace: ${err.detail || res.statusText}`);
+        }
+    } catch (err) {
+        alert(`Error connecting to server: ${err.message}`);
+    } finally {
+        btnApply.disabled = false;
+        btnApply.textContent = "💾 Save & Switch Project";
+    }
+}
+
 
 /**
  * Scan Corpus UI Handler (Milestone 4)

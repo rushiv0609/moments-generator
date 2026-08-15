@@ -58,6 +58,54 @@
 
             <!-- Tab 1: Pipeline Control & Job Submission -->
             <section class="tab-pane active" id="pane-pipeline">
+                <!-- Project Workspace Card -->
+                <div class="card glass-card" style="margin-bottom: 20px; border-left: 4px solid var(--accent-color);">
+                    <div class="card-header">
+                        <h2>📂 Project Workspace Bundle</h2>
+                        <span class="badge badge-success" id="workspaceBadge">🟢 Active Workspace</span>
+                    </div>
+                    <p class="card-desc" style="margin-bottom: 15px;">
+                        All database manifests, Qdrant vectors, caches, and exported videos are isolated 100% inside this project folder.
+                    </p>
+
+                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px;">
+                        <!-- Project Workspace Folder -->
+                        <div class="form-group">
+                            <label for="workspacePath"><strong>Project Workspace Directory</strong> (Database & Output Storage)</label>
+                            <div style="display: flex; gap: 8px;">
+                                <input type="text" id="workspacePath" class="input-text" placeholder="/Users/.../Projects/MySummerTrip" style="flex: 1;">
+                                <button type="button" class="btn btn-secondary" id="btnBrowseWorkspace" title="Open Native macOS Finder Folder Picker">
+                                    📂 Choose in Finder
+                                </button>
+                            </div>
+                            <span class="input-hint">Contains <code>.moments/manifest.db</code>, <code>.moments/qdrant/</code>, and <code>exports/</code>.</span>
+                        </div>
+
+                        <!-- Source Media Folder -->
+                        <div class="form-group">
+                            <label for="corpusPath"><strong>Media Corpus Directory</strong> (Source Photos & Videos)</label>
+                            <div style="display: flex; gap: 8px;">
+                                <input type="text" id="corpusPath" class="input-text" placeholder="/Users/.../Pictures/Holiday2025" value="/Users/rushivyas/Pictures/pin-bhabha/" style="flex: 1;">
+                                <button type="button" class="btn btn-secondary" id="btnBrowseCorpus" title="Open Native macOS Finder Folder Picker">
+                                    📂 Choose in Finder
+                                </button>
+                            </div>
+                            <span class="input-hint">Local directory containing raw HEIC, JPG, PNG, MP4, and MOV files.</span>
+                        </div>
+                    </div>
+
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 15px; padding-top: 12px; border-top: 1px solid var(--border-subtle); font-size: 13px;">
+                        <div style="color: var(--text-muted);">
+                            <span>Indexed Media: <strong id="wsIndexedCount" style="color: var(--text-color);">0</strong> files</span> • 
+                            <span>Vectors in Qdrant: <strong id="wsVectorCount" style="color: #10b981;">0</strong></span> • 
+                            <span>Storage Mode: <strong style="color: var(--accent-color);">100% Isolated Embedded Disk</strong></span>
+                        </div>
+                        <button type="button" class="btn btn-primary" id="btnApplyWorkspace" style="padding: 6px 14px; font-size: 12px;">
+                            💾 Save & Switch Project
+                        </button>
+                    </div>
+                </div>
+
                 <div class="grid-2col">
                     <!-- Job Submission Card -->
                     <div class="card glass-card">
@@ -69,14 +117,6 @@
                         </p>
 
                         <form id="jobForm" class="form-grid">
-                            <div class="form-group">
-                                <label for="corpusPath">Corpus Folder Path</label>
-                                <input type="text" id="corpusPath" class="input-text"
-                                    placeholder="/Users/username/Pictures/Holiday2025"
-                                    value="/Users/rushivyas/Pictures/pin-bhabha/">
-                                <span class="input-hint">Local directory containing HEIC, JPG, and MP4/MOV files.</span>
-                            </div>
-
                             <div class="form-group">
                                 <label for="promptText">Semantic Search Prompt</label>
                                 <input type="text" id="promptText" class="input-text"

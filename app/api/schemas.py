@@ -34,6 +34,36 @@ class HealthResponse(BaseModel):
     qdrant: QdrantStatus
     ffmpeg: ComponentStatus
     system_memory: Dict[str, Any]
+    active_workspace: Optional[Dict[str, Any]] = None
+
+
+class FolderPickerRequest(BaseModel):
+    prompt: Optional[str] = "Select Folder"
+    default_path: Optional[str] = None
+
+
+class FolderPickerResponse(BaseModel):
+    selected_path: Optional[str] = None
+    cancelled: bool = False
+
+
+class SetWorkspaceRequest(BaseModel):
+    workspace_path: str = Field(..., description="Absolute path for project workspace directory")
+    corpus_path: Optional[str] = Field(default=None, description="Optional default media corpus directory")
+
+
+class WorkspaceResponse(BaseModel):
+    workspace_dir: str
+    corpus_dir: Optional[str] = None
+    manifest_db_path: str
+    qdrant_storage_path: str
+    exports_dir: str
+    cache_dir: str
+    created_at: float
+    updated_at: float
+    total_files: int = 0
+    indexed_files: int = 0
+    total_vectors: int = 0
 
 
 class DataDirItem(BaseModel):
