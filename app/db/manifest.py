@@ -102,12 +102,11 @@ class ManifestDB:
     def for_workspace(cls, workspace_dir: Union[str, Path]) -> "ManifestDB":
         """
         Open or initialize a ManifestDB instance directly inside a Project Workspace.
-        Stored at <workspace_dir>/.moments/manifest.db.
+        Stored at <workspace_dir>/manifest.db.
         """
         w_path = Path(workspace_dir).resolve()
-        moments_dir = w_path / ".moments"
-        moments_dir.mkdir(parents=True, exist_ok=True)
-        db_file = moments_dir / "manifest.db"
+        w_path.mkdir(parents=True, exist_ok=True)
+        db_file = w_path / "manifest.db"
         return cls(str(db_file))
 
     @classmethod

@@ -32,7 +32,7 @@ def test_workspace_manager_directory_structure(tmp_path):
     assert Path(info.cache_dir).exists()
 
     # Verify workspace_meta.json
-    meta_file = project_dir / ".moments" / "workspace_meta.json"
+    meta_file = project_dir / "workspace_meta.json"
     assert meta_file.exists()
     with open(meta_file, "r") as f:
         meta = json.load(f)

@@ -116,21 +116,18 @@ class WorkspaceManager:
     ) -> WorkspaceInfo:
         """
         Activate or create a project workspace directory.
-        Creates self-contained .moments/ internal structure.
+        Creates visible manifest.db, qdrant_storage/, cache/, and exports/ at workspace root.
         """
         w_path = Path(workspace_path).expanduser().resolve()
         w_path.mkdir(parents=True, exist_ok=True)
 
-        moments_dir = w_path / ".moments"
-        moments_dir.mkdir(parents=True, exist_ok=True)
-
         exports_dir = w_path / "exports"
         exports_dir.mkdir(parents=True, exist_ok=True)
 
-        cache_dir = moments_dir / "cache"
+        cache_dir = w_path / "cache"
         cache_dir.mkdir(parents=True, exist_ok=True)
 
-        qdrant_storage = moments_dir / "qdrant"
+        qdrant_storage = w_path / "qdrant_storage"
         qdrant_storage.mkdir(parents=True, exist_ok=True)
 
         is_same_workspace = self._workspace_path == w_path and self._qdrant_db is not None
@@ -152,7 +149,7 @@ class WorkspaceManager:
             self._corpus_path = Path(corpus_path).expanduser().resolve()
 
         # Save / update project workspace metadata
-        meta_file = moments_dir / "workspace_meta.json"
+        meta_file = w_path / "workspace_meta.json"
         now = time.time()
         meta: Dict[str, Any] = {
             "workspace_dir": str(w_path),
@@ -202,7 +199,7 @@ class WorkspaceManager:
         """Get the active project's intermediate cache directory."""
         if not self._workspace_path:
             raise RuntimeError("No active project workspace set.")
-        cache = self._workspace_path / ".moments" / "cache"
+        cache = self._workspace_path / "cache"
         cache.mkdir(parents=True, exist_ok=True)
         return cache
 
@@ -211,15 +208,14 @@ class WorkspaceManager:
         if not self._workspace_path or not self._workspace_path.exists():
             raise RuntimeError("No active project workspace.")
 
-        moments_dir = self._workspace_path / ".moments"
-        db_path = moments_dir / "manifest.db"
-        qdrant_path = moments_dir / "qdrant"
+        db_path = self._workspace_path / "manifest.db"
+        qdrant_path = self._workspace_path / "qdrant_storage"
         exports_path = self._workspace_path / "exports"
-        cache_path = moments_dir / "cache"
+        cache_path = self._workspace_path / "cache"
 
         created_at = time.time()
         updated_at = created_at
-        meta_file = moments_dir / "workspace_meta.json"
+        meta_file = self._workspace_path / "workspace_meta.json"
         if meta_file.exists():
             try:
                 with open(meta_file, "r") as f:
