@@ -133,16 +133,23 @@ class WorkspaceManager:
         qdrant_storage = moments_dir / "qdrant"
         qdrant_storage.mkdir(parents=True, exist_ok=True)
 
-        self._workspace_path = w_path
+        is_same_workspace = self._workspace_path == w_path and self._qdrant_db is not None
+
+        if not is_same_workspace:
+            # If switching to a new workspace, close existing Qdrant client to release directory lock
+            if self._qdrant_db is not None:
+                self._qdrant_db.close()
+                self._qdrant_db = None
+
+            self._workspace_path = w_path
+            # Initialize project-scoped ManifestDB
+            self._manifest_db = ManifestDB.for_workspace(w_path)
+            # Initialize project-scoped embedded Qdrant DB
+            self._qdrant_db = QdrantVectorDB(storage_path=qdrant_storage)
+            self._qdrant_db.ensure_collection("media_embeddings", vector_size=768)
+
         if corpus_path:
             self._corpus_path = Path(corpus_path).expanduser().resolve()
-
-        # Initialize project-scoped ManifestDB
-        self._manifest_db = ManifestDB.for_workspace(w_path)
-
-        # Initialize project-scoped embedded Qdrant DB
-        self._qdrant_db = QdrantVectorDB(storage_path=qdrant_storage)
-        self._qdrant_db.ensure_collection("media_embeddings", vector_size=768)
 
         # Save / update project workspace metadata
         meta_file = moments_dir / "workspace_meta.json"
@@ -266,8 +273,7 @@ def get_workspace_manager() -> WorkspaceManager:
     global _workspace_manager
     if _workspace_manager is None:
         _workspace_manager = WorkspaceManager()
-        # Initialize default workspace under ~/.moments_projects/default if not explicitly set
-        settings = get_settings()
-        default_dir = Path(settings.DATA_DIR) / "default_project"
+        # Default workspace under ~/Moments_Projects/Default (outside repository source tree)
+        default_dir = Path.home() / "Moments_Projects" / "Default"
         _workspace_manager.set_workspace(default_dir)
     return _workspace_manager

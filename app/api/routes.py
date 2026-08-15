@@ -78,7 +78,12 @@ def check_qdrant() -> QdrantStatus:
     """Check connectivity to Qdrant vector database (Remote or Embedded)."""
     settings = get_settings()
     try:
-        qdrant_db = QdrantVectorDB.create(settings=settings)
+        workspace_mgr = get_workspace_manager()
+        if workspace_mgr.is_active and workspace_mgr._qdrant_db:
+            qdrant_db = workspace_mgr.get_qdrant_db()
+        else:
+            qdrant_db = QdrantVectorDB.create(settings=settings)
+
         collections = qdrant_db.client.get_collections()
         count = len(collections.collections)
         mode_str = "Remote Docker" if qdrant_db.mode == "remote" else "Embedded Disk Engine"
@@ -342,15 +347,19 @@ async def debug_embed(
 def scan_media_corpus(request: ScanRequest) -> ScanResponse:
     """
     Recursively scan a media directory, extract EXIF/container metadata,
-    compute two-tier hashes, and sync state with SQLite manifest.
+    compute two-tier hashes, and sync state with SQLite manifest inside the active Project Workspace.
     """
-    settings = get_settings()
     try:
         workspace_mgr = get_workspace_manager()
-        if workspace_mgr.is_active:
+        if request.workspace_path:
+            workspace_mgr.set_workspace(request.workspace_path, corpus_path=request.corpus_path)
+            manifest = workspace_mgr.get_manifest_db()
+        elif workspace_mgr.is_active:
             manifest = workspace_mgr.get_manifest_db()
         else:
-            manifest = ManifestDB.open_or_create(request.corpus_path, data_dir=settings.DATA_DIR)
+            default_ws = Path.home() / "Moments_Projects" / "Default"
+            workspace_mgr.set_workspace(default_ws, corpus_path=request.corpus_path)
+            manifest = workspace_mgr.get_manifest_db()
 
         from app.core.scanner import scan_corpus
         summary = scan_corpus(request.corpus_path, manifest, force_reindex=request.force_reindex)

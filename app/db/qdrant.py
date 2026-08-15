@@ -116,6 +116,16 @@ class QdrantVectorDB:
             self.client = QdrantClient(":memory:")
             self.mode = "in_memory"
 
+    def close(self) -> None:
+        """Close the underlying client and release storage file lock."""
+        if hasattr(self, "client") and self.client is not None:
+            if hasattr(self.client, "close"):
+                try:
+                    self.client.close()
+                except Exception as e:
+                    logger.debug("Notice closing Qdrant client: %s", e)
+
+
     @classmethod
     def create(
         cls,

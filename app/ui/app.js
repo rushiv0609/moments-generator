@@ -79,6 +79,10 @@ async function browseFolder(targetInputId, promptText) {
             const data = await res.json();
             if (data.selected_path && targetInput) {
                 targetInput.value = data.selected_path;
+                if (targetInputId === "workspacePath") {
+                    // Automatically activate selected workspace
+                    applyWorkspace(false);
+                }
             }
         }
     } catch (err) {
@@ -110,18 +114,20 @@ async function fetchWorkspace(updateInputs = false) {
     }
 }
 
-async function applyWorkspace() {
+async function applyWorkspace(showAlert = true) {
     const wsInput = document.getElementById("workspacePath");
     const corpusInput = document.getElementById("corpusPath");
     const btnApply = document.getElementById("btnApplyWorkspace");
 
     if (!wsInput || !wsInput.value.trim()) {
-        alert("Please specify a Project Workspace Directory path.");
+        if (showAlert) alert("Please specify a Project Workspace Directory path.");
         return;
     }
 
-    btnApply.disabled = true;
-    btnApply.textContent = "⏳ Activating...";
+    if (btnApply) {
+        btnApply.disabled = true;
+        btnApply.textContent = "⏳ Activating...";
+    }
 
     try {
         const res = await fetch("/api/v1/workspace/set", {
@@ -135,18 +141,20 @@ async function applyWorkspace() {
 
         if (res.ok) {
             const data = await res.json();
-            alert(`✅ Project Workspace Activated:\n${data.workspace_dir}`);
+            if (showAlert) alert(`✅ Project Workspace Activated:\n${data.workspace_dir}`);
             fetchWorkspace(false);
             fetchHealth(true);
         } else {
             const err = await res.json();
-            alert(`Failed to activate workspace: ${err.detail || res.statusText}`);
+            if (showAlert) alert(`Failed to activate workspace: ${err.detail || res.statusText}`);
         }
     } catch (err) {
-        alert(`Error connecting to server: ${err.message}`);
+        if (showAlert) alert(`Error connecting to server: ${err.message}`);
     } finally {
-        btnApply.disabled = false;
-        btnApply.textContent = "💾 Save & Switch Project";
+        if (btnApply) {
+            btnApply.disabled = false;
+            btnApply.textContent = "💾 Save & Switch Project";
+        }
     }
 }
 
@@ -155,6 +163,8 @@ async function applyWorkspace() {
  * Scan Corpus UI Handler (Milestone 4)
  */
 async function scanCorpusUI() {
+    const wsInput = document.getElementById("workspacePath");
+    const workspacePath = wsInput ? wsInput.value.trim() : null;
     const corpusPath = document.getElementById("corpusPath").value.trim();
     const forceReindex = document.getElementById("forceReindex").checked;
     const btnScan = document.getElementById("btnScanCorpus");
@@ -175,7 +185,11 @@ async function scanCorpusUI() {
         const res = await fetch("/api/v1/scan", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ corpus_path: corpusPath, force_reindex: forceReindex }),
+            body: JSON.stringify({
+                corpus_path: corpusPath,
+                workspace_path: workspacePath || null,
+                force_reindex: forceReindex,
+            }),
         });
 
         if (!res.ok) {
@@ -187,6 +201,7 @@ async function scanCorpusUI() {
         document.getElementById("scanTotal").textContent = data.total_found;
         document.getElementById("scanPhotos").textContent = `${data.images_count} photos`;
         document.getElementById("scanVideos").textContent = `${data.videos_count} clips`;
+        fetchWorkspace(false);
 
         tbody.innerHTML = "";
         if (!data.files || data.files.length === 0) {
