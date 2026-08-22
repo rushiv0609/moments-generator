@@ -25,6 +25,7 @@ logger = logging.getLogger(__name__)
 class VectorPoint:
     """
     A single embedding point with structured media metadata payload.
+    Supports dual-granularity indexing: individual frames ('frame') and scene summaries ('scene').
     """
     vector: Union[np.ndarray, List[float]]
     file_path: str
@@ -35,6 +36,12 @@ class VectorPoint:
     creation_timestamp: Optional[float] = None
     duration_seconds: Optional[float] = None
     id: Optional[str] = None  # UUID string; generated automatically if None
+    granularity: str = "frame"  # 'frame' | 'scene'
+    scene_id: Optional[int] = None        # Scene index within video
+    scene_start: Optional[float] = None   # Scene start timestamp in seconds
+    scene_end: Optional[float] = None     # Scene end timestamp in seconds
+    scene_frame_count: Optional[int] = None  # Number of frames in this scene
+    is_scene_representative: bool = False  # True for the mean summary vector of a scene
     extra: Dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self):
@@ -53,6 +60,12 @@ class VectorPoint:
             "source_offset": self.source_offset,
             "creation_timestamp": self.creation_timestamp,
             "duration_seconds": self.duration_seconds,
+            "granularity": self.granularity,
+            "scene_id": self.scene_id,
+            "scene_start": self.scene_start,
+            "scene_end": self.scene_end,
+            "scene_frame_count": self.scene_frame_count,
+            "is_scene_representative": self.is_scene_representative,
         }
         if self.extra:
             payload.update(self.extra)
@@ -81,6 +94,11 @@ class SearchResult:
     source_offset: float = 0.0
     creation_timestamp: Optional[float] = None
     duration_seconds: Optional[float] = None
+    granularity: str = "frame"  # 'frame' | 'scene'
+    scene_id: Optional[int] = None
+    scene_start: Optional[float] = None
+    scene_end: Optional[float] = None
+    is_scene_representative: bool = False
     payload: Dict[str, Any] = field(default_factory=dict)
 
 
@@ -214,6 +232,9 @@ class QdrantVectorDB:
             ("file_type", PayloadSchemaType.KEYWORD),
             ("creation_timestamp", PayloadSchemaType.FLOAT),
             ("file_id", PayloadSchemaType.INTEGER),
+            ("granularity", PayloadSchemaType.KEYWORD),
+            ("scene_id", PayloadSchemaType.INTEGER),
+            ("is_scene_representative", PayloadSchemaType.KEYWORD),
         ]
         for field_name, schema_type in fields_to_index:
             try:
@@ -309,10 +330,13 @@ class QdrantVectorDB:
         end_timestamp: Optional[float] = None,
         file_type: Optional[str] = None,
         file_path: Optional[str] = None,
+        granularity: Optional[str] = None,
+        scene_id: Optional[int] = None,
+        is_scene_representative: Optional[bool] = None,
         must_not_file_paths: Optional[List[str]] = None,
     ) -> List[SearchResult]:
         """
-        Execute cosine similarity search with optional metadata filters (e.g. time range).
+        Execute cosine similarity search with optional metadata filters (e.g. time range, granularity).
         Returns structured SearchResult objects ordered by score descending.
         """
         if not self.collection_exists(collection_name):
@@ -325,7 +349,7 @@ class QdrantVectorDB:
         must_conditions = []
         must_not_conditions = []
 
-        # Temporal range filter (e.g. for timeline bucketing in Milestone 8)
+        # Temporal range filter (e.g. for timeline bucketing)
         if start_timestamp is not None or end_timestamp is not None:
             range_kwargs: Dict[str, float] = {}
             if start_timestamp is not None:
@@ -355,6 +379,33 @@ class QdrantVectorDB:
                 models.FieldCondition(
                     key="file_path",
                     match=models.MatchValue(value=file_path),
+                )
+            )
+
+        # Granularity filter ('frame' vs 'scene')
+        if granularity is not None:
+            must_conditions.append(
+                models.FieldCondition(
+                    key="granularity",
+                    match=models.MatchValue(value=granularity),
+                )
+            )
+
+        # Specific scene filter
+        if scene_id is not None:
+            must_conditions.append(
+                models.FieldCondition(
+                    key="scene_id",
+                    match=models.MatchValue(value=scene_id),
+                )
+            )
+
+        # Scene representative flag filter
+        if is_scene_representative is not None:
+            must_conditions.append(
+                models.FieldCondition(
+                    key="is_scene_representative",
+                    match=models.MatchValue(value=is_scene_representative),
                 )
             )
 
@@ -399,6 +450,11 @@ class QdrantVectorDB:
                     source_offset=payload.get("source_offset", 0.0),
                     creation_timestamp=payload.get("creation_timestamp"),
                     duration_seconds=payload.get("duration_seconds"),
+                    granularity=payload.get("granularity", "frame"),
+                    scene_id=payload.get("scene_id"),
+                    scene_start=payload.get("scene_start"),
+                    scene_end=payload.get("scene_end"),
+                    is_scene_representative=payload.get("is_scene_representative", False),
                     payload=payload,
                 )
             )

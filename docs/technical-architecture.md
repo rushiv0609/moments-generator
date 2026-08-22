@@ -1,8 +1,8 @@
 # Technical Architecture: Local AI Moments Generator
 
-**Version:** 1.1  
-**Status:** Finalised (updated with benchmark-proven architecture)  
-**Last Updated:** 2026-08-15  
+**Version:** 1.2  
+**Status:** Finalised (updated with LangGraph Director Agent + PySceneDetect architecture)  
+**Last Updated:** 2026-08-22  
 **Reference:** [Product Requirements Document](file:///Users/rushivyas/development/projects/moments-generator/docs/product-requirements.md)
 
 ---
@@ -468,69 +468,264 @@ def run_pipeline(corpus_path, force_reindex):
 
 ---
 
-## 5. Curation, Pacing & Culling Algorithms
+## 5. Agentic Curation: LangGraph Director Agent
 
-### 5.1 Temporal Time-Bucketing
+> **Architecture Upgrade (v1.2):** The static time-bucketing curator (§5.1–5.3 in v1.1) is superseded by the **LangGraph Director Agent** — an iterative reasoning state machine that uses a local LLM to plan, retrieve, draft, critique, and assemble video timelines.
 
-Prevents temporal clustering (e.g., 1,000 photos from a single day dominating a 5-year corpus).
+### 5.1 System Context
 
-**Step 1 — Calculate global time range:**
+```
+┌──────────────────────────────────────────────────────────────────────────┐
+│  Data Layer (Milestones 1–8, built)                                     │
+│                                                                          │
+│  ┌───────────────┐  ┌──────────────────┐  ┌────────────────────────┐    │
+│  │ ManifestDB    │  │ QdrantVectorDB   │  │ EmbedderInterface      │    │
+│  │ (SQLite)      │  │ (Qdrant Embedded)│  │ (SigLIP 2 MLX/MPS)    │    │
+│  └───────┬───────┘  └────────┬─────────┘  └──────────┬─────────────┘    │
+│          │                   │                        │                  │
+├──────────┼───────────────────┼────────────────────────┼──────────────────┤
+│          │                   │                        │                  │
+│  Reasoning Layer (Milestone 9, new)                   │                  │
+│                                                       │                  │
+│  ┌────────────────────────────────────────────────────┼──────────────┐   │
+│  │  LangGraph Director Agent                         │              │   │
+│  │                                                   │              │   │
+│  │  ┌──────────┐  ┌──────────────┐  ┌──────────┐   │              │   │
+│  │  │ Planner  │→│ Retrieval v2 │→│ Drafting  │   │              │   │
+│  │  │ (LLM)    │  │ (SigLIP+Qdr) │  │ (LLM)    │   │              │   │
+│  │  └──────────┘  └──────────────┘  └────┬──────┘   │              │   │
+│  │                                       │          │              │   │
+│  │                                       ▼          │              │   │
+│  │                                  ┌──────────┐    │              │   │
+│  │                                  │ Editor   │    │              │   │
+│  │                                  │ (LLM)    │    │              │   │
+│  │                                  └────┬─────┘    │              │   │
+│  │                                  pass/fail       │              │   │
+│  │                                       │          │              │   │
+│  │                                       ▼          │              │   │
+│  │                                  ┌──────────┐    │              │   │
+│  │                                  │ Compiler │────┘              │   │
+│  │                                  │ → EDL    │                   │   │
+│  │                                  └──────────┘                   │   │
+│  └─────────────────────────────────────────────────────────────────┘   │
+│          │                                                             │
+│          ▼                                                             │
+│  ┌──────────────────────────────────────────┐                         │
+│  │  DirectorLLMInterface (Pluggable)        │                         │
+│  │  • OllamaDirectorLLM                     │                         │
+│  │    - Qwen 3.6 9B (Q4_K_M)               │                         │
+│  │    - Gemma 4 E4B / E2B                   │                         │
+│  │  • Sequential model swap for comparison  │                         │
+│  └──────────────────────────────────────────┘                         │
+└──────────────────────────────────────────────────────────────────────────┘
+```
 
-$$\Delta T_{corpus} = T_{max} - T_{min}$$
+### 5.2 Scene Detection (PySceneDetect + AdaptiveDetector)
 
-**Step 2 — Determine bucket count (K):**
+Video files are segmented into visually coherent **scenes** during ingestion (not during curation). This runs in the Ingestion Pipeline (§4) as a preprocessing step before frame extraction.
 
-Given target output duration $D_{out} \in [1, 300]$ seconds:
+**Why AdaptiveDetector:** The primary media content is handheld trip videos with lots of camera motion, few hard cuts, and gradual scene transitions. `ContentDetector` fires false positives on pans, tilts, and hand shake. `AdaptiveDetector` uses a rolling average of frame deltas that adapts to the motion level and only fires on genuine scene changes.
 
-$$K = \min\left(10, \max\left(5, \left\lfloor \frac{D_{out}}{15} \right\rfloor\right)\right)$$
+**Configuration:**
+| Parameter | Value | Rationale |
+|---|---|---|
+| `adaptive_threshold` | 3.0 | Higher tolerance for camera shake |
+| `min_scene_length` | 2.0 seconds | Prevents micro-scenes from hand wobble |
 
-| Duration | K |
-|---|---|
-| 60 s | 5 |
-| 120 s | 8 |
-| 180 s | 10 |
-| 300 s | 10 |
+**Integration point:** After `extract_video_frames()` returns individual frames, each frame is tagged with its `scene_id`, `scene_start`, and `scene_end` based on the scene boundary analysis. An additional **scene-representative vector** (mean of all frame embeddings within a scene) is computed and upserted to Qdrant.
 
-**Step 3 — Partition into intervals:**
+### 5.3 Dual-Granularity Vector Architecture
 
-$$B_i = \left[ T_{min} + i \cdot \frac{\Delta T_{corpus}}{K}, \; T_{min} + (i+1) \cdot \frac{\Delta T_{corpus}}{K} \right) \quad \text{for } i \in [0, K-1]$$
+Both frame-level and scene-level vectors are stored in the **same Qdrant collection**, distinguished by a `granularity` payload field. This enables two complementary retrieval strategies without separate collections.
 
-**Step 4 — Time quota per bucket:**
+**Example: 60-second mountain panorama pan**
 
-$$t_{quota} = \frac{D_{out}}{K}$$
+| Granularity | Vectors | Score for "snow-capped peak" | Best For |
+|---|---|---|---|
+| **Frame-level** (60 vectors) | Each 1-second frame individually | `frame_58: 0.88` (precise best moment) | Finding the single best shot |
+| **Scene-level** (1 vector) | Mean of all 60 frame vectors | `scene_0: 0.81` (holistic scene) | Selecting a coherent clip segment |
 
-**Step 5 — Filtered vector query per bucket:**
-
-For each bucket $B_i$, execute a Qdrant filtered search:
-
+**Qdrant payload schema extension:**
 ```json
 {
-  "vector": "<prompt_embedding>",
-  "filter": {
-    "must": [
-      {
-        "key": "creation_timestamp",
-        "range": { "gte": "<B_i.start>", "lt": "<B_i.end>" }
-      }
-    ]
-  },
-  "limit": 50,
-  "with_payload": true
+  "file_path": "/path/to/video.mp4",
+  "file_type": "video",
+  "frame_index": 58,
+  "source_offset": 58.0,
+  "creation_timestamp": 1710000000.0,
+  "duration_seconds": 60.0,
+  "granularity": "frame",
+  "scene_id": 0,
+  "scene_start": 0.0,
+  "scene_end": 60.0,
+  "scene_frame_count": 60,
+  "is_scene_representative": false
 }
 ```
 
-### 5.2 Semantic Thresholding & Fallback
+For photos, `granularity` is always `"frame"`, `scene_id` is `null`, and `is_scene_representative` is `false`.
 
-- **Cosine similarity:** $S(p, v) = \frac{p \cdot v}{\|p\|_2 \|v\|_2}$
-- **Relevance floor:** $\theta_{min} = 0.22$ (configurable via `config.MIN_SIMILARITY_THRESHOLD`).
-- Any candidate scoring below $\theta_{min}$ is pruned.
-- **Zero-match trigger:** If no candidates across all buckets meet the threshold, abort with `422 Unprocessable Entity` and reason `ZERO_SEMANTIC_MATCHES`.
+### 5.4 LangGraph Director State Machine
 
-### 5.3 Burst & Proximity Deduplication
+```
+                             [ START ]
+                                 │
+                                 ▼
+                   ┌───────────────────────────┐
+                   │       PLANNER NODE        │
+                   │ LLM breaks prompt into    │
+                   │ 3–5 temporal sub-queries  │
+                   └─────────────┬─────────────┘
+                                 │
+                                 ▼
+                   ┌───────────────────────────┐
+                   │    RETRIEVAL NODE v2      │
+                   │ Pass 1: Scene-level Top-K │
+                   │ Pass 2: Frame-level Top-K │
+                   │ (SigLIP embed_text +      │
+                   │  Qdrant filtered search)  │
+                   └─────────────┬─────────────┘
+                                 │
+                                 ▼
+                   ┌───────────────────────────┐◄──────┐
+                   │       DRAFTING NODE       │       │
+                   │ LLM assembles timeline    │       │
+                   │ from dual-granularity     │       │
+                   │ candidates, can use       │       │
+                   │ scenes OR precise frames  │       │
+                   └─────────────┬─────────────┘       │
+                                 │                     │
+                                 ▼                     │
+                   ┌───────────────────────────┐       │
+                   │       EDITOR NODE         │       │
+                   │ LLM critiques pacing,     │       │
+                   │ flow, duplicates, and     │       │
+                   │ duration adherence        │       │
+                   └─────────────┬─────────────┘       │
+                                 │                     │
+                           pass / fail ────────────────┘
+                                 │         (max 3 iterations)
+                                 ▼
+                   ┌───────────────────────────┐
+                   │      COMPILER NODE        │
+                   │ Converts storyboard →     │
+                   │ timeline_segments in      │
+                   │ ManifestDB + EDL JSON     │
+                   └───────────────────────────┘
+```
 
-1. **Visual similarity pruning:** If two selected items have cosine distance < 0.05 or perceptual hash Hamming distance < 5, retain only the higher-scoring item.
-2. **Video temporal windowing:** If frames $f_a$ (offset $t_a$) and $f_b$ (offset $t_b$) from the same video file have $|t_a - t_b| < 4.0$ seconds, merge into a single segment: start = $\max(0, \min(t_a, t_b) - 0.5)$, duration = 3.0 seconds.
-3. **Static image duration:** Each selected image is assigned a display duration of 3.0 seconds.
+#### 5.4.1 State Schema
+
+```python
+from typing import TypedDict, List, Annotated
+from pydantic import BaseModel, Field
+import operator
+
+class TimelineSegment(BaseModel):
+    file_path: str
+    start_offset: float
+    end_offset: float
+    duration: float
+    segment_type: str        # 'image' | 'video_clip'
+    scene_id: Optional[int]  # Scene this came from (if video)
+    retrieval_strategy: str  # 'scene' | 'frame'
+    justification: str       # LLM reasoning for this pick
+
+class DirectorState(TypedDict):
+    # Inputs
+    user_prompt: str
+    target_duration: int
+    retrieval_mode: str       # 'scene' | 'frame' | 'dual'
+
+    # Internal Working Memory
+    search_queries: List[str]
+    retrieved_candidates: List[dict]
+
+    # Agent Outputs
+    storyboard: List[TimelineSegment]
+    editor_feedback: List[str]
+
+    # Loop Control
+    iteration_count: Annotated[int, operator.add]
+    approved: bool
+
+    # Provenance
+    llm_model: str            # Which model generated this timeline
+    run_label: str            # Human-readable label for comparison
+```
+
+#### 5.4.2 Node Responsibilities
+
+| Node | Uses LLM? | Touches Existing Code | Primary Action |
+|---|---|---|---|
+| **Planner** | ✅ | — | Decomposes prompt into 3–5 visual sub-queries |
+| **Retrieval** | ❌ | `EmbedderInterface.embed_text()` + `QdrantVectorDB.search()` | Dual-pass search (scene-level + frame-level) |
+| **Drafting** | ✅ | — | Selects segments from candidates, assigns durations, builds storyboard |
+| **Editor** | ✅ | — | Reviews storyboard against quality rules, provides correction feedback |
+| **Compiler** | ❌ | `ManifestDB` + `TimelineSegmentRecord` | Persists approved storyboard to SQLite |
+
+### 5.5 Pluggable Local LLM Interface
+
+The Director uses local quantized LLMs via Ollama. Only one model can be loaded at a time (single-GPU constraint on consumer Apple Silicon).
+
+```python
+class DirectorLLMInterface(ABC):
+    """Abstract interface for local LLM backends used by Director nodes."""
+
+    @abstractmethod
+    def structured_generate(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        response_schema: type[BaseModel],
+        temperature: float = 0.7,
+    ) -> BaseModel:
+        """Generate structured JSON output conforming to a Pydantic schema."""
+
+    @abstractmethod
+    def model_info(self) -> Dict[str, Any]:
+        """Return model name, quantization, context length."""
+```
+
+**Supported models (sequential swap, not parallel):**
+
+| Model | Quantization | VRAM | Context | Use Case |
+|---|---|---|---|---|
+| Qwen 3.6 9B | Q4_K_M | ~6 GB | 32K | Primary — strong structured JSON output |
+| Gemma 4 E4B | — | ~5 GB | 8K | Alternative — smaller, faster |
+| Gemma 4 E2B | — | ~3 GB | 8K | Lightweight — fastest iteration |
+
+**Sequential A/B comparison workflow:**
+1. Load Model A via Ollama (`ollama run qwen3.6:9b`)
+2. Run graph → produces Timeline-A, stored with `run_label="qwen3.6-9b"` and `llm_model` metadata
+3. Unload Model A, load Model B (`ollama run gemma4:e4b`)
+4. Run graph with same prompt → produces Timeline-B, stored with `run_label="gemma4-e4b"`
+5. UI shows both timelines side-by-side for human comparison
+
+### 5.6 Multi-Alternative Generation & Human-in-the-Loop
+
+The Director generates **up to 4 alternative timelines** per prompt (constrained by sequential LLM execution):
+
+| Alternative | Retrieval Mode | Description |
+|---|---|---|
+| **Alt-A** | Scene-level only | Longer cinematic clips, coherent segments |
+| **Alt-B** | Frame-level only | Highlight-reel style, best individual moments |
+| **Alt-C** | Dual (LLM chooses) | LLM picks scenes or frames per sub-query |
+| **Alt-D** | *(optional, different LLM)* | Same prompt, different model for comparison |
+
+All alternatives use the **same LLM model** per run. Alt-D requires swapping the Ollama model and re-running.
+
+**Human-in-the-Loop UI:**
+- Side-by-side timeline previews with thumbnail strips extracted from source files
+- Each alternative shows: segment count, total duration, LLM reasoning, retrieval strategy used
+- User selects preferred alternative → approved timeline proceeds to FFmpeg rendering (§6)
+- Selection history stored in `timeline_runs` table for learning which strategies work best
+
+### 5.7 Semantic Thresholding (Retained from v1.1)
+
+- **Cosine similarity floor:** $\theta_{min} = 0.22$ (configurable via `config.MIN_SIMILARITY_THRESHOLD`).
+- Any candidate scoring below $\theta_{min}$ is pruned before being shown to the Drafting Node LLM.
+- **Zero-match trigger:** If no candidates across all sub-queries meet the threshold, the graph terminates early with `ZERO_SEMANTIC_MATCHES` error.
 
 ---
 
@@ -697,14 +892,23 @@ class Settings(BaseSettings):
     FRAME_QUEUE_SIZE: int = 256
     VECTOR_QUEUE_SIZE: int = 512
 
-    # Curation
+    # Curation & Semantic Search
     MIN_SIMILARITY_THRESHOLD: float = 0.22
     MAX_OUTPUT_DURATION: int = 300
     DEFAULT_ASPECT_RATIO: str = "1:1"
     IMAGE_DISPLAY_DURATION: float = 3.0
     VIDEO_SEGMENT_DURATION: float = 3.0
-    DEDUP_COSINE_THRESHOLD: float = 0.05
-    DEDUP_PHASH_THRESHOLD: int = 5
+
+    # Scene Detection (PySceneDetect)
+    SCENE_ADAPTIVE_THRESHOLD: float = 3.0    # Higher = less sensitive to camera shake
+    SCENE_MIN_LENGTH_SEC: float = 2.0        # Minimum scene duration in seconds
+
+    # Director Agent (LangGraph + Ollama)
+    OLLAMA_BASE_URL: str = "http://localhost:11434"
+    DIRECTOR_MODEL_NAME: str = "qwen3.6:9b"  # Ollama model tag
+    DIRECTOR_MAX_ITERATIONS: int = 3          # Max Drafting→Editor loops
+    DIRECTOR_TEMPERATURE: float = 0.7
+    DIRECTOR_DEFAULT_RETRIEVAL_MODE: str = "dual"  # 'scene' | 'frame' | 'dual'
 
     # Qdrant
     QDRANT_HOST: str = "localhost"
@@ -828,5 +1032,9 @@ exec uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload
 | `xxhash` | Fast file hashing | Manifest |
 | `numpy` | Array operations | Embedding pipeline |
 | `psutil` | Process memory monitoring | Telemetry, benchmarking |
+| `scenedetect[opencv]` | Video scene boundary detection | Scene-level vector generation |
+| `langgraph` | LLM agent state machine framework | Director Agent |
+| `langchain-ollama` | Ollama LLM integration for LangGraph | Director Agent LLM calls |
 | `ffmpeg` (system) | Media encoding/rendering | Rendering only (not extraction) |
 | `docker` (system) | Container runtime | Qdrant |
+| `ollama` (system) | Local LLM inference server | Director Agent (Qwen 3.6 / Gemma 4) |

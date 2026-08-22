@@ -35,6 +35,9 @@ class FrameData:
     pixels: np.ndarray      # Shape: (224, 224, 3), dtype: uint8, RGB
     source_offset: float    # Seconds into source video (0.0 for photos)
     file_type: str = "image"  # 'image' | 'video'
+    scene_id: Optional[int] = None        # Scene ID if extracted from a video
+    scene_start: Optional[float] = None   # Timestamp start of the scene
+    scene_end: Optional[float] = None     # Timestamp end of the scene
 
 
 def pad_to_square(arr: np.ndarray, target_size: int = 224) -> np.ndarray:

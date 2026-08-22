@@ -22,6 +22,7 @@ from app.db.qdrant import QdrantVectorDB, VectorPoint
 from app.db.models import FileRecord, FileStatus
 from app.core.embedder import EmbedderInterface, create_embedder
 from app.core.extractor import decode_image, extract_video_frames, FrameData
+from app.core.scene_detector import detect_video_scenes, SceneBoundary
 from app.config import get_settings
 
 logger = logging.getLogger(__name__)
@@ -96,6 +97,7 @@ class IngestionPipeline:
     def _decode_file(self, record: FileRecord) -> Tuple[FileRecord, List[FrameData], Optional[str]]:
         """
         Worker function: decodes a single photo or video file into 224x224 FrameData chunks.
+        For video files, detects scene boundaries using AdaptiveDetector and tags frames.
         Runs inside the ThreadPoolExecutor.
         """
         try:
@@ -105,8 +107,24 @@ class IngestionPipeline:
 
             frames: List[FrameData] = []
             if record.file_type == "video":
-                # Extract at 1 FPS with hardware acceleration
+                # 1. Detect scene boundaries with AdaptiveDetector
+                scenes: List[SceneBoundary] = detect_video_scenes(str(p))
+
+                # 2. Extract frames at 1 FPS with hardware acceleration
                 for f in extract_video_frames(str(p), target_size=224, sampling_fps=1.0):
+                    # Tag frame with its matching scene
+                    for sc in scenes:
+                        if sc.start_sec <= f.source_offset <= sc.end_sec:
+                            f.scene_id = sc.scene_id
+                            f.scene_start = sc.start_sec
+                            f.scene_end = sc.end_sec
+                            break
+                    if f.scene_id is None and scenes:
+                        # Fallback to closest scene
+                        f.scene_id = scenes[0].scene_id
+                        f.scene_start = scenes[0].start_sec
+                        f.scene_end = scenes[0].end_sec
+
                     frames.append(f)
             else:
                 # Photo decode via Apple ImageIO / Pillow
@@ -208,6 +226,9 @@ class IngestionPipeline:
             file_to_point_ids: Dict[int, List[str]] = {}
             model_name = getattr(self.embedder, "model_name", "siglip2")
 
+            # Collect scene vectors for mean pooling: (record, scene_id) -> list of (vec, scene_start, scene_end)
+            scene_vectors_map: Dict[Tuple[int, int], List[Tuple[np.ndarray, Optional[float], Optional[float], FileRecord]]] = {}
+
             for (record, frame), vec in zip(pending_points_metadata, vectors):
                 pt = VectorPoint(
                     vector=vec,
@@ -218,23 +239,69 @@ class IngestionPipeline:
                     source_offset=frame.source_offset,
                     creation_timestamp=record.creation_timestamp,
                     duration_seconds=record.duration_seconds,
+                    granularity="frame",
+                    scene_id=frame.scene_id,
+                    scene_start=frame.scene_start,
+                    scene_end=frame.scene_end,
+                    is_scene_representative=False,
                 )
                 points_to_upsert.append(pt)
                 if record.id not in file_to_point_ids:
                     file_to_point_ids[record.id] = []
                 file_to_point_ids[record.id].append(pt.id)
 
-            # 3. Batch upsert into Qdrant Vector DB
+                # If this is a video frame belonging to a scene, collect for scene-representative vector
+                if record.file_type == "video" and frame.scene_id is not None and record.id is not None:
+                    key = (record.id, frame.scene_id)
+                    if key not in scene_vectors_map:
+                        scene_vectors_map[key] = []
+                    scene_vectors_map[key].append((vec, frame.scene_start, frame.scene_end, record))
+
+            # 3. Compute Scene-Representative Summary Vectors (Mean of frames in each scene)
+            for (file_id, scene_id), items in scene_vectors_map.items():
+                if not items:
+                    continue
+                vecs = [it[0] for it in items]
+                first_rec = items[0][3]
+                sc_start = items[0][1]
+                sc_end = items[0][2]
+
+                mean_vec = np.mean(vecs, axis=0).astype(np.float32)
+                norm = np.linalg.norm(mean_vec)
+                if norm > 0:
+                    mean_vec = mean_vec / norm
+
+                scene_pt = VectorPoint(
+                    vector=mean_vec,
+                    file_path=first_rec.file_path,
+                    file_id=first_rec.id,
+                    file_type="video",
+                    frame_index=-1,  # Sentinel indicating scene summary
+                    source_offset=sc_start if sc_start is not None else 0.0,
+                    creation_timestamp=first_rec.creation_timestamp,
+                    duration_seconds=first_rec.duration_seconds,
+                    granularity="scene",
+                    scene_id=scene_id,
+                    scene_start=sc_start,
+                    scene_end=sc_end,
+                    scene_frame_count=len(vecs),
+                    is_scene_representative=True,
+                )
+                points_to_upsert.append(scene_pt)
+                if first_rec.id in file_to_point_ids:
+                    file_to_point_ids[first_rec.id].append(scene_pt.id)
+
+            # 4. Batch upsert into Qdrant Vector DB
             emit_progress(
                 "INDEXING",
                 processed_count,
                 total_files,
-                message=f"Upserting {len(points_to_upsert)} vector points into Qdrant...",
+                message=f"Upserting {len(points_to_upsert)} vector points (frames & scenes) into Qdrant...",
             )
             self.qdrant.upsert_points("media_embeddings", points_to_upsert)
             total_vectors_added += len(points_to_upsert)
 
-            # 4. Checkpoint SQLite Manifest state to INDEXED
+            # 5. Checkpoint SQLite Manifest state to INDEXED
             for file_id, point_ids in file_to_point_ids.items():
                 self.manifest.update_embedding_info(
                     file_id=file_id,
