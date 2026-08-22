@@ -1225,12 +1225,22 @@ function initMediaExplorer() {
                         <span class="explorer-badge-type ${badgeClass}">${typeLabel}</span>
                         <span style="font-family: var(--font-mono); font-size: 10px; color: var(--text-muted);">${item.granularity}</span>
                     </div>
+                    <div style="display: flex; gap: 6px; margin-top: 6px; padding-top: 6px; border-top: 1px solid rgba(255,255,255,0.06);">
+                        <button type="button" class="btn-card-action btn-find-similar" data-point-id="${item.point_id}" data-file-name="${item.file_name}" style="flex: 1; padding: 4px 6px; font-size: 10px; background: rgba(99, 102, 241, 0.15); border: 1px solid rgba(99, 102, 241, 0.3); border-radius: 4px; color: #a5b4fc; cursor: pointer;">
+                            ✨ Similar
+                        </button>
+                        ${isVideo ? `
+                        <button type="button" class="btn-card-action btn-inspect-scenes" data-file-path="${item.file_path}" data-file-name="${item.file_name}" style="flex: 1; padding: 4px 6px; font-size: 10px; background: rgba(168, 85, 247, 0.15); border: 1px solid rgba(168, 85, 247, 0.3); border-radius: 4px; color: #d8b4fe; cursor: pointer;">
+                            🎬 Scenes
+                        </button>` : ""}
+                    </div>
                 </div>
             `;
 
-            // Clicking card opens media
-            card.style.cursor = "pointer";
-            card.addEventListener("click", () => {
+            // Clicking thumbnail opens player or photo
+            const thumbWrap = card.querySelector(".explorer-thumb-wrap");
+            thumbWrap.style.cursor = "pointer";
+            thumbWrap.addEventListener("click", () => {
                 if (isVideo) {
                     openVideoPlayerModal(item);
                 } else {
@@ -1238,9 +1248,221 @@ function initMediaExplorer() {
                 }
             });
 
+            // Find Similar button click
+            const btnSim = card.querySelector(".btn-find-similar");
+            if (btnSim) {
+                btnSim.addEventListener("click", (e) => {
+                    e.stopPropagation();
+                    executeSimilarSearch(item.point_id, item.file_name);
+                });
+            }
+
+            // Inspect Scenes button click
+            const btnScenes = card.querySelector(".btn-inspect-scenes");
+            if (btnScenes) {
+                btnScenes.addEventListener("click", (e) => {
+                    e.stopPropagation();
+                    openSceneBreakdownModal(item.file_path, item.file_name);
+                });
+            }
+
             grid.appendChild(card);
         });
     }
+
+    async function executeSimilarSearch(pointId, fileName) {
+        btnSearch.disabled = true;
+        statsEl.textContent = `Finding visually similar media to "${fileName}"...`;
+        const startTime = performance.now();
+
+        try {
+            const res = await fetch(`/api/v1/workspace/similar?point_id=${encodeURIComponent(pointId)}&top_k=16`);
+            if (!res.ok) {
+                const err = await res.json();
+                throw new Error(err.detail || `HTTP ${res.status}`);
+            }
+
+            const data = await res.json();
+            const elapsed = Math.round(performance.now() - startTime);
+
+            renderExplorerResults({
+                query: `Similar to: ${fileName}`,
+                results: data.results,
+            }, elapsed);
+            resultsHeading.textContent = `✨ Visually & Semantically Similar to "${fileName}"`;
+        } catch (err) {
+            console.error("Similar search error:", err);
+            alert(`Failed to find similar items: ${err.message}`);
+        } finally {
+            btnSearch.disabled = false;
+        }
+    }
+
+    async function openSceneBreakdownModal(filePath, fileName) {
+        // Remove existing modal if any
+        const existing = document.getElementById("mediaScenesModal");
+        if (existing) existing.remove();
+
+        const modal = document.createElement("div");
+        modal.id = "mediaScenesModal";
+        modal.style.cssText = `
+            position: fixed; inset: 0; background: rgba(0, 0, 0, 0.85); backdrop-filter: blur(8px);
+            z-index: 9999; display: flex; align-items: center; justify-content: center; padding: 20px;
+        `;
+
+        modal.innerHTML = `
+            <div style="background: #111827; border: 1px solid var(--border-color); border-radius: 16px; max-width: 900px; width: 100%; max-height: 85vh; display: flex; flex-direction: column; overflow: hidden; box-shadow: 0 25px 50px -12px rgba(0,0,0,0.7);">
+                <div style="display: flex; justify-content: space-between; align-items: center; padding: 16px 20px; border-bottom: 1px solid var(--border-color);">
+                    <div>
+                        <h3 style="font-size: 16px; margin: 0; color: #fff;">🎬 PySceneDetect Visual Breakdown</h3>
+                        <span style="font-size: 12px; color: var(--text-muted);">${fileName}</span>
+                    </div>
+                    <button id="btnCloseScenesModal" style="background: transparent; border: none; font-size: 20px; color: #9ca3af; cursor: pointer;">✕</button>
+                </div>
+                <div id="scenesModalBody" style="padding: 20px; overflow-y: auto; flex: 1;">
+                    <div style="text-align: center; padding: 30px; color: var(--text-muted);">
+                        <div class="spinner" style="width: 24px; height: 24px; border: 3px solid #fff; border-top-color: transparent; border-radius: 50%; margin: 0 auto 12px; animation: spin 0.8s linear infinite;"></div>
+                        Loading PySceneDetect scene boundaries & extracted frames...
+                    </div>
+                </div>
+            </div>
+        `;
+
+        document.body.appendChild(modal);
+
+        const closeBtn = document.getElementById("btnCloseScenesModal");
+        if (closeBtn) closeBtn.addEventListener("click", () => modal.remove());
+        modal.addEventListener("click", (e) => { if (e.target === modal) modal.remove(); });
+
+        try {
+            const res = await fetch(`/api/v1/workspace/video/scenes?file_path=${encodeURIComponent(filePath)}`);
+            if (!res.ok) {
+                const err = await res.json();
+                throw new Error(err.detail || `HTTP ${res.status}`);
+            }
+
+            const data = await res.json();
+            const bodyEl = document.getElementById("scenesModalBody");
+            if (!bodyEl) return;
+
+            if (data.scenes.length === 0) {
+                bodyEl.innerHTML = `
+                    <div style="text-align: center; padding: 30px; color: var(--text-muted);">
+                        <p>No separate scene cuts detected. Entire video was indexed as one scene (${data.total_frames} frames).</p>
+                    </div>
+                `;
+                return;
+            }
+
+            let html = `
+                <div style="display: flex; justify-content: space-between; margin-bottom: 16px; font-size: 13px;">
+                    <span>Detected <strong>${data.total_scenes} Coherent Scenes</strong> (${data.total_frames} 1-FPS frames)</span>
+                </div>
+                <div style="display: flex; flex-direction: column; gap: 16px;">
+            `;
+
+            data.scenes.forEach((sc) => {
+                // Find all frames belonging to this scene
+                const sceneFrames = data.frames.filter(f => f.scene_id === sc.scene_id);
+
+                html += `
+                    <div style="background: rgba(255,255,255,0.03); border: 1px solid var(--border-color); border-radius: 10px; padding: 14px;">
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+                            <div style="display: flex; align-items: center; gap: 8px;">
+                                <span class="badge badge-accent" style="font-size: 11px;">Scene #${sc.scene_id}</span>
+                                <strong style="font-size: 13px; color: #fff;">${sc.start_sec.toFixed(1)}s – ${sc.end_sec.toFixed(1)}s</strong>
+                                <span style="font-size: 11px; color: var(--text-muted);">(${sc.duration_sec}s duration, ${sceneFrames.length} frames)</span>
+                            </div>
+                            <div style="display: flex; gap: 8px;">
+                                <button class="btn btn-secondary btn-play-scene" data-offset="${sc.start_sec}" style="padding: 4px 10px; font-size: 11px;">
+                                    ▶️ Play Scene
+                                </button>
+                                ${sc.point_id ? `
+                                <button class="btn btn-primary btn-similar-scene" data-point-id="${sc.point_id}" style="padding: 4px 10px; font-size: 11px; background: linear-gradient(135deg, #6366f1, #8b5cf6);">
+                                    ✨ Find Similar
+                                </button>` : ""}
+                            </div>
+                        </div>
+
+                        <!-- Scene Frames Filmstrip -->
+                        <div style="display: flex; gap: 8px; overflow-x: auto; padding-bottom: 6px;">
+                `;
+
+                sceneFrames.forEach(f => {
+                    html += `
+                        <div class="scene-filmstrip-frame" data-offset="${f.source_offset}" style="flex-shrink: 0; width: 100px; cursor: pointer; text-align: center;">
+                            <div style="aspect-ratio: 4/3; background: #000; border-radius: 6px; overflow: hidden; border: 1px solid var(--border-color);">
+                                <img src="${f.thumbnail_url}" style="width: 100%; height: 100%; object-fit: cover;" loading="lazy" alt="Frame @ ${f.source_offset}s">
+                            </div>
+                            <span style="font-size: 10px; font-family: var(--font-mono); color: var(--text-muted); display: block; margin-top: 3px;">@ ${f.source_offset}s</span>
+                        </div>
+                    `;
+                });
+
+                html += `
+                        </div>
+                    </div>
+                `;
+            });
+
+            html += `</div>`;
+            bodyEl.innerHTML = html;
+
+            // Attach play scene listeners
+            bodyEl.querySelectorAll(".btn-play-scene").forEach(btn => {
+                btn.addEventListener("click", () => {
+                    const offset = parseFloat(btn.getAttribute("data-offset") || "0");
+                    modal.remove();
+                    openVideoPlayerModal({
+                        file_path: filePath,
+                        file_name: fileName,
+                        media_url: `/api/v1/media/file?path=${filePath}`,
+                        source_offset: offset,
+                        score: 1.0,
+                    });
+                });
+            });
+
+            // Attach filmstrip frame click listeners
+            bodyEl.querySelectorAll(".scene-filmstrip-frame").forEach(el => {
+                el.addEventListener("click", () => {
+                    const offset = parseFloat(el.getAttribute("data-offset") || "0");
+                    modal.remove();
+                    openVideoPlayerModal({
+                        file_path: filePath,
+                        file_name: fileName,
+                        media_url: `/api/v1/media/file?path=${filePath}`,
+                        source_offset: offset,
+                        score: 1.0,
+                    });
+                });
+            });
+
+            // Attach find similar scene listeners
+            bodyEl.querySelectorAll(".btn-similar-scene").forEach(btn => {
+                btn.addEventListener("click", () => {
+                    const pid = btn.getAttribute("data-point-id");
+                    if (pid) {
+                        modal.remove();
+                        executeSimilarSearch(pid, `${fileName} (Scene)`);
+                    }
+                });
+            });
+
+        } catch (err) {
+            console.error("Failed to load scenes:", err);
+            const bodyEl = document.getElementById("scenesModalBody");
+            if (bodyEl) {
+                bodyEl.innerHTML = `
+                    <div style="text-align: center; padding: 30px; color: #ef4444;">
+                        <h4>Failed to load scenes</h4>
+                        <p style="font-size: 12px; color: var(--text-muted);">${err.message}</p>
+                    </div>
+                `;
+            }
+        }
+    }
+
 
     function openVideoPlayerModal(item) {
         // Remove existing modal if any

@@ -10,7 +10,7 @@ import uuid
 import logging
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional, List, Dict, Any, Union
+from typing import Optional, List, Dict, Any, Union, Tuple
 
 import numpy as np
 from qdrant_client import QdrantClient, models
@@ -461,6 +461,98 @@ class QdrantVectorDB:
 
         return results
 
+    def get_point(self, collection_name: str, point_id: str) -> Optional[Tuple[SearchResult, List[float]]]:
+        """
+        Retrieve a single point with its raw vector and metadata payload.
+        """
+        if not self.collection_exists(collection_name):
+            return None
+
+        try:
+            records = self.client.retrieve(
+                collection_name=collection_name,
+                ids=[point_id],
+                with_vectors=True,
+                with_payload=True,
+            )
+            if not records:
+                return None
+            rec = records[0]
+            payload = rec.payload or {}
+            res = SearchResult(
+                point_id=str(rec.id),
+                score=1.0,
+                file_path=payload.get("file_path", ""),
+                file_id=payload.get("file_id"),
+                file_type=payload.get("file_type", "image"),
+                frame_index=payload.get("frame_index", 0),
+                source_offset=payload.get("source_offset", 0.0),
+                creation_timestamp=payload.get("creation_timestamp"),
+                duration_seconds=payload.get("duration_seconds"),
+                granularity=payload.get("granularity", "frame"),
+                scene_id=payload.get("scene_id"),
+                scene_start=payload.get("scene_start"),
+                scene_end=payload.get("scene_end"),
+                is_scene_representative=payload.get("is_scene_representative", False),
+                payload=payload,
+            )
+            vec = rec.vector if isinstance(rec.vector, list) else list(rec.vector)
+            return res, vec
+        except Exception as e:
+            logger.error("Failed to retrieve point %s: %s", point_id, e)
+            return None
+
+    def get_points_by_file(self, collection_name: str, file_path: str) -> List[SearchResult]:
+        """
+        Retrieve all points (frames and scenes) indexed for a specific file path.
+        """
+        if not self.collection_exists(collection_name):
+            return []
+
+        try:
+            records, _ = self.client.scroll(
+                collection_name=collection_name,
+                scroll_filter=models.Filter(
+                    must=[
+                        models.FieldCondition(
+                            key="file_path",
+                            match=models.MatchValue(value=file_path),
+                        )
+                    ]
+                ),
+                limit=1000,
+                with_payload=True,
+                with_vectors=False,
+            )
+            results: List[SearchResult] = []
+            for rec in records:
+                payload = rec.payload or {}
+                results.append(
+                    SearchResult(
+                        point_id=str(rec.id),
+                        score=1.0,
+                        file_path=payload.get("file_path", ""),
+                        file_id=payload.get("file_id"),
+                        file_type=payload.get("file_type", "image"),
+                        frame_index=payload.get("frame_index", 0),
+                        source_offset=payload.get("source_offset", 0.0),
+                        creation_timestamp=payload.get("creation_timestamp"),
+                        duration_seconds=payload.get("duration_seconds"),
+                        granularity=payload.get("granularity", "frame"),
+                        scene_id=payload.get("scene_id"),
+                        scene_start=payload.get("scene_start"),
+                        scene_end=payload.get("scene_end"),
+                        is_scene_representative=payload.get("is_scene_representative", False),
+                        payload=payload,
+                    )
+                )
+            # Sort chronologically by source_offset, then by granularity (scenes first)
+            results.sort(key=lambda x: (x.source_offset, 0 if x.granularity == "scene" else 1, x.frame_index))
+            return results
+        except Exception as e:
+            logger.error("Failed to retrieve points for %s: %s", file_path, e)
+            return []
+
     def delete_points(self, collection_name: str, point_ids: List[str]) -> bool:
         """Delete specific vector points by ID."""
         if not point_ids or not self.collection_exists(collection_name):
@@ -501,3 +593,4 @@ class QdrantVectorDB:
         except Exception as e:
             logger.error("Failed to delete points by file_path '%s': %s", file_path, e)
             raise
+

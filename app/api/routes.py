@@ -645,6 +645,138 @@ def search_workspace_media(
     )
 
 
+@router.get("/workspace/video/scenes")
+def get_video_scenes_breakdown(
+    file_path: str = Query(..., description="Absolute path to video file"),
+):
+    """
+    Retrieve all PySceneDetect scene boundaries and 1-FPS frames for a specific video file.
+    """
+    workspace_mgr = get_workspace_manager()
+    if not workspace_mgr.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="No active project workspace set.",
+        )
+
+    qdrant = workspace_mgr.get_qdrant_db()
+    points = qdrant.get_points_by_file(collection_name="media_embeddings", file_path=file_path)
+
+    # Group points by scene_id
+    scenes_dict = {}
+    frames_list = []
+
+    for pt in points:
+        if pt.granularity == "scene":
+            s_id = pt.scene_id if pt.scene_id is not None else 0
+            scenes_dict[s_id] = {
+                "scene_id": s_id,
+                "point_id": pt.point_id,
+                "start_sec": pt.scene_start if pt.scene_start is not None else 0.0,
+                "end_sec": pt.scene_end if pt.scene_end is not None else pt.duration_seconds or 0.0,
+                "duration_sec": round((pt.scene_end or 0.0) - (pt.scene_start or 0.0), 2),
+                "frame_count": pt.payload.get("scene_frame_count", 0),
+                "thumbnail_url": f"/api/v1/media/file?path={file_path}&offset={pt.scene_start or 0.0}&thumbnail=true",
+                "playback_url": f"/api/v1/media/file?path={file_path}#t={pt.scene_start or 0.0}",
+            }
+        else:
+            frames_list.append({
+                "point_id": pt.point_id,
+                "frame_index": pt.frame_index,
+                "source_offset": pt.source_offset,
+                "scene_id": pt.scene_id,
+                "thumbnail_url": f"/api/v1/media/file?path={file_path}&offset={pt.source_offset}&thumbnail=true",
+                "playback_url": f"/api/v1/media/file?path={file_path}#t={pt.source_offset}",
+            })
+
+    # Sort scenes by start time
+    sorted_scenes = sorted(scenes_dict.values(), key=lambda s: s["start_sec"])
+
+    return {
+        "file_path": file_path,
+        "file_name": Path(file_path).name,
+        "total_scenes": len(sorted_scenes),
+        "total_frames": len(frames_list),
+        "scenes": sorted_scenes,
+        "frames": frames_list,
+    }
+
+
+@router.get("/workspace/similar")
+def find_similar_media(
+    point_id: str = Query(..., description="Qdrant point ID to find similar visual items for"),
+    top_k: int = Query(default=12, ge=1, le=100, description="Max ranked similar results"),
+    granularity: Optional[str] = Query(default="all", description="'all' | 'frame' | 'scene'"),
+):
+    """
+    Find visually/semantically similar photos, frames, or scenes across the workspace given a point ID.
+    Uses nearest-neighbor vector search on the underlying 768-dim SigLIP 2 embedding.
+    """
+    workspace_mgr = get_workspace_manager()
+    if not workspace_mgr.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="No active project workspace set.",
+        )
+
+    qdrant = workspace_mgr.get_qdrant_db()
+    point_data = qdrant.get_point(collection_name="media_embeddings", point_id=point_id)
+    if not point_data:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Point {point_id} not found in vector database.")
+
+    source_item, query_vec = point_data
+
+    granularity_val = None if granularity == "all" else granularity
+    results = qdrant.search(
+        collection_name="media_embeddings",
+        query_vector=query_vec,
+        limit=top_k + 1,
+        granularity=granularity_val,
+    )
+
+    # Filter out the source point itself
+    filtered = [r for r in results if r.point_id != point_id][:top_k]
+
+    items = []
+    for r in filtered:
+        target_offset = r.source_offset if r.source_offset is not None else (r.scene_start or 0.0)
+
+        if r.file_type == "video":
+            thumb_url = f"/api/v1/media/file?path={r.file_path}&offset={target_offset}&thumbnail=true"
+            playback_url = f"/api/v1/media/file?path={r.file_path}#t={target_offset}"
+        else:
+            thumb_url = f"/api/v1/media/file?path={r.file_path}"
+            playback_url = f"/api/v1/media/file?path={r.file_path}"
+
+        items.append({
+            "point_id": r.point_id,
+            "score": round(r.score, 4),
+            "file_path": r.file_path,
+            "file_name": Path(r.file_path).name,
+            "file_type": r.file_type,
+            "frame_index": r.frame_index,
+            "source_offset": r.source_offset,
+            "granularity": r.granularity,
+            "scene_id": r.scene_id,
+            "scene_start": r.scene_start,
+            "scene_end": r.scene_end,
+            "is_scene_representative": r.is_scene_representative,
+            "media_url": f"/api/v1/media/file?path={r.file_path}",
+            "thumbnail_url": thumb_url,
+            "playback_url": playback_url,
+        })
+
+    return {
+        "source_point_id": point_id,
+        "source_file_name": Path(source_item.file_path).name,
+        "source_granularity": source_item.granularity,
+        "source_source_offset": source_item.source_offset,
+        "total_results": len(items),
+        "results": items,
+    }
+
+
+
 # =========================================================================
 # Milestone 9 & 10: Curation & Video Rendering Stubs
 # =========================================================================
