@@ -38,6 +38,9 @@ class MockPipelineEmbedder(EmbedderInterface):
     def model_info(self) -> dict:
         return {"model_name": self.model_name, "backend": "mock", "precision": "fp32"}
 
+    def empty_cache(self) -> None:
+        pass
+
 
 def create_synthetic_video_with_cuts(file_path: Path, fps: int = 30, scene_dur_sec: int = 3) -> str:
     """

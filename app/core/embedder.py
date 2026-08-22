@@ -46,6 +46,11 @@ class EmbedderInterface(ABC):
         """Return engine metadata and model details."""
         pass
 
+    @abstractmethod
+    def empty_cache(self) -> None:
+        """Clear GPU/accelerator memory caches."""
+        pass
+
 
 class MLXEmbedder(EmbedderInterface):
     """
@@ -129,6 +134,10 @@ class MLXEmbedder(EmbedderInterface):
             "embedding_dim": self.embedding_dim,
             "fused_kernel": True,
         }
+
+    def empty_cache(self) -> None:
+        if HAS_MLX:
+            mx.metal.clear_cache()
 
 
 class PyTorchMPSEmbedder(EmbedderInterface):

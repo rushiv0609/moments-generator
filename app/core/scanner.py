@@ -53,14 +53,34 @@ class ScanSummary:
 
 
 def get_file_type_and_mime(path: Path) -> Tuple[Optional[str], Optional[str]]:
-    """Determine media type ('image' or 'video') and MIME type from file extension."""
+    """Determine media type ('image' or 'video') and MIME type using magic bytes with extension fallback."""
+    try:
+        with open(path, "rb") as f:
+            header = f.read(12)
+    except Exception:
+        header = b""
+
+    true_type = None
+    if header.startswith(b"\xff\xd8\xff"):
+        true_type = "image"
+    elif header.startswith(b"\x89PNG\r\n\x1a\n"):
+        true_type = "image"
+    elif len(header) >= 12 and header[4:8] == b"ftyp":
+        brand = header[8:12]
+        if brand in (b"heic", b"heix", b"hevc", b"heca", b"mif1", b"msf1"):
+            true_type = "image"
+        elif brand in (b"qt  ", b"mp41", b"mp42", b"isom", b"avc1", b"M4V "):
+            true_type = "video"
+
     suffix = path.suffix.lower()
-    if suffix in SUPPORTED_IMAGE_EXTS:
+    
+    if true_type == "image" or (true_type is None and suffix in SUPPORTED_IMAGE_EXTS):
         mime, _ = mimetypes.guess_type(path.name)
         return "image", mime or "image/jpeg"
-    elif suffix in SUPPORTED_VIDEO_EXTS:
+    elif true_type == "video" or (true_type is None and suffix in SUPPORTED_VIDEO_EXTS):
         mime, _ = mimetypes.guess_type(path.name)
         return "video", mime or "video/mp4"
+
     return None, None
 
 

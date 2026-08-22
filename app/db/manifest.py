@@ -42,61 +42,75 @@ class ManifestDB:
         conn.execute("PRAGMA journal_mode = WAL;")
         conn.execute("PRAGMA synchronous = NORMAL;")
         conn.execute("PRAGMA foreign_keys = ON;")
+        
+        # Ensure schema tables exist even if manifest.db was deleted/cleared on disk
+        cursor = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='files'")
+        if not cursor.fetchone():
+            self._init_schema_on_conn(conn)
+
         return conn
 
     def _init_schema(self):
         """Initialize manifest database tables and indices."""
-        with self._get_connection() as conn:
-            conn.executescript("""
-                CREATE TABLE IF NOT EXISTS manifest_meta (
-                    key         TEXT PRIMARY KEY,
-                    value       TEXT NOT NULL,
-                    updated_at  REAL NOT NULL
-                );
+        with sqlite3.connect(self.db_path, timeout=30.0, check_same_thread=False) as conn:
+            conn.execute("PRAGMA journal_mode = WAL;")
+            conn.execute("PRAGMA synchronous = NORMAL;")
+            conn.execute("PRAGMA foreign_keys = ON;")
+            self._init_schema_on_conn(conn)
 
-                CREATE TABLE IF NOT EXISTS files (
-                    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
-                    file_path           TEXT    UNIQUE NOT NULL,
-                    file_hash           TEXT    NOT NULL,
-                    content_hash        TEXT,
-                    file_size           INTEGER NOT NULL,
-                    file_type           TEXT    NOT NULL,
-                    mime_type           TEXT,
-                    creation_timestamp  REAL,
-                    timestamp_source    TEXT,
-                    duration_seconds    REAL,
-                    status              TEXT    NOT NULL DEFAULT 'PENDING',
-                    error_message       TEXT,
-                    frame_count         INTEGER,
-                    model_name          TEXT,
-                    model_version       TEXT,
-                    qdrant_point_ids    TEXT,
-                    embedded_at         REAL,
-                    scanned_at          REAL,
-                    updated_at          REAL
-                );
+    def _init_schema_on_conn(self, conn: sqlite3.Connection):
+        """Execute table creation DDL on a specific connection."""
+        conn.executescript("""
+            CREATE TABLE IF NOT EXISTS manifest_meta (
+                key         TEXT PRIMARY KEY,
+                value       TEXT NOT NULL,
+                updated_at  REAL NOT NULL
+            );
 
-                CREATE INDEX IF NOT EXISTS idx_files_status       ON files(status);
-                CREATE INDEX IF NOT EXISTS idx_files_hash         ON files(file_hash);
-                CREATE INDEX IF NOT EXISTS idx_files_content_hash ON files(content_hash);
-                CREATE INDEX IF NOT EXISTS idx_files_type         ON files(file_type);
-                CREATE INDEX IF NOT EXISTS idx_files_ts           ON files(creation_timestamp);
+            CREATE TABLE IF NOT EXISTS files (
+                id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+                file_path           TEXT    UNIQUE NOT NULL,
+                file_hash           TEXT    NOT NULL,
+                content_hash        TEXT,
+                file_size           INTEGER NOT NULL,
+                file_type           TEXT    NOT NULL,
+                mime_type           TEXT,
+                creation_timestamp  REAL,
+                timestamp_source    TEXT,
+                duration_seconds    REAL,
+                status              TEXT    NOT NULL DEFAULT 'PENDING',
+                error_message       TEXT,
+                frame_count         INTEGER,
+                model_name          TEXT,
+                model_version       TEXT,
+                qdrant_point_ids    TEXT,
+                embedded_at         REAL,
+                scanned_at          REAL,
+                updated_at          REAL
+            );
 
-                CREATE TABLE IF NOT EXISTS timeline_segments (
-                    id               INTEGER PRIMARY KEY AUTOINCREMENT,
-                    job_id           TEXT    NOT NULL,
-                    position         INTEGER NOT NULL,
-                    file_id          INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
-                    segment_type     TEXT    NOT NULL,
-                    start_offset     REAL,
-                    duration         REAL    NOT NULL,
-                    similarity_score REAL,
-                    time_bucket      INTEGER,
-                    UNIQUE(job_id, position)
-                );
+            CREATE INDEX IF NOT EXISTS idx_files_status       ON files(status);
+            CREATE INDEX IF NOT EXISTS idx_files_hash         ON files(file_hash);
+            CREATE INDEX IF NOT EXISTS idx_files_content_hash ON files(content_hash);
+            CREATE INDEX IF NOT EXISTS idx_files_type         ON files(file_type);
+            CREATE INDEX IF NOT EXISTS idx_files_ts           ON files(creation_timestamp);
 
-                CREATE INDEX IF NOT EXISTS idx_timeline_job ON timeline_segments(job_id);
-            """)
+            CREATE TABLE IF NOT EXISTS timeline_segments (
+                id               INTEGER PRIMARY KEY AUTOINCREMENT,
+                job_id           TEXT    NOT NULL,
+                position         INTEGER NOT NULL,
+                file_id          INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
+                segment_type     TEXT    NOT NULL,
+                start_offset     REAL,
+                duration         REAL    NOT NULL,
+                similarity_score REAL,
+                time_bucket      INTEGER,
+                UNIQUE(job_id, position)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_timeline_job ON timeline_segments(job_id);
+        """)
+
 
     @classmethod
     def for_workspace(cls, workspace_dir: Union[str, Path]) -> "ManifestDB":

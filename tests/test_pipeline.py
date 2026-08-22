@@ -34,6 +34,9 @@ class MockEmbedder(EmbedderInterface):
     def model_info(self) -> dict:
         return {"model_name": self.model_name, "backend": "mock", "precision": "fp32"}
 
+    def empty_cache(self) -> None:
+        pass
+
 
 
 def create_sample_image(path: Path, color=(255, 0, 0)):

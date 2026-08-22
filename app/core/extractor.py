@@ -20,6 +20,12 @@ try:
 except ImportError:
     HAS_IMAGEIO = False
 
+try:
+    import av
+    HAS_AV = True
+except ImportError:
+    HAS_AV = False
+
 pillow_heif.register_heif_opener()
 
 
@@ -135,17 +141,70 @@ def decode_image(file_path: str, target_size: int = 224) -> FrameData:
     )
 
 
-def extract_video_frames(
+def extract_video_frames_av(
     file_path: str,
     target_size: int = 224,
     sampling_fps: float = 1.0,
 ) -> Generator[FrameData, None, None]:
     """
-    Extract video frames sampled at 1.0 FPS, scaled to target_size (224x224 RGB)
-    for semantic embedding. Streams frames lazily as a generator.
+    High-performance, C-level multi-threaded video frame decoding using PyAV (FFmpeg).
+    Releases the Python GIL during decoding and scaling in libavcodec / libswscale.
     """
     path_str = str(Path(file_path).resolve())
-    cap = cv2.VideoCapture(path_str)
+    with av.open(path_str) as container:
+        video_streams = [s for s in container.streams if s.type == "video"]
+        if not video_streams:
+            raise ValueError(f"No video streams found in '{file_path}'")
+
+        stream = video_streams[0]
+        stream.thread_type = "AUTO"  # C-level multi-threaded codec decoding
+
+        rate = stream.guessed_rate or stream.average_rate or stream.base_rate or 30
+        fps = float(rate) if rate else 30.0
+
+        frame_interval = max(1, int(round(fps / sampling_fps))) if (fps and fps > 0) else 30
+        frame_idx = 0
+        extracted_count = 0
+
+        for frame in container.decode(stream):
+            if frame.is_corrupt:
+                frame_idx += 1
+                continue
+
+            if frame_idx % frame_interval == 0:
+                if frame.time is not None:
+                    sec = float(frame.time)
+                elif frame.pts is not None and stream.time_base:
+                    sec = float(frame.pts * stream.time_base)
+                else:
+                    sec = float(frame_idx / fps) if fps > 0 else float(extracted_count)
+
+                # Scale & convert to RGB24 inside libswscale (C layer)
+                rgb_frame = frame.reformat(width=target_size, height=target_size, format="rgb24")
+                arr = rgb_frame.to_ndarray()
+
+                yield FrameData(
+                    file_path=path_str,
+                    frame_index=extracted_count,
+                    pixels=arr,
+                    source_offset=round(sec, 3),
+                    file_type="video",
+                )
+                extracted_count += 1
+
+            frame_idx += 1
+
+
+def extract_video_frames_cv2(
+    file_path: str,
+    target_size: int = 224,
+    sampling_fps: float = 1.0,
+) -> Generator[FrameData, None, None]:
+    """
+    Fallback video frame extractor using OpenCV with AVFoundation acceleration.
+    """
+    path_str = str(Path(file_path).resolve())
+    cap = cv2.VideoCapture(path_str, cv2.CAP_AVFOUNDATION)
 
     if not cap.isOpened():
         raise ValueError(f"Unable to open video file at '{file_path}'")
@@ -162,9 +221,7 @@ def extract_video_frames(
                 break
 
             if frame_idx % frame_interval == 0:
-                # Resize frame to target_size (squish to 224x224 or aspect scale)
                 resized = cv2.resize(frame, (target_size, target_size), interpolation=cv2.INTER_AREA)
-                # Convert BGR (OpenCV) to RGB
                 rgb = cv2.cvtColor(resized, cv2.COLOR_BGR2RGB)
                 source_offset = frame_idx / fps if (fps and fps > 0) else float(extracted_count)
 
@@ -180,3 +237,29 @@ def extract_video_frames(
             frame_idx += 1
     finally:
         cap.release()
+
+
+def extract_video_frames(
+    file_path: str,
+    target_size: int = 224,
+    sampling_fps: float = 1.0,
+) -> Generator[FrameData, None, None]:
+    """
+    Extract video frames sampled at sampling_fps (default 1.0 FPS), scaled to target_size (224x224 RGB).
+    Prefers macOS native AVFoundation hardware decoding (OpenCV); falls back to PyAV C-level decoder.
+    """
+    cv2_err = None
+    try:
+        yield from extract_video_frames_cv2(file_path, target_size, sampling_fps)
+        return
+    except Exception as e:
+        cv2_err = e
+
+    if HAS_AV:
+        try:
+            yield from extract_video_frames_av(file_path, target_size, sampling_fps)
+            return
+        except Exception as av_err:
+            raise ValueError(f"Unable to open video file at '{file_path}': {av_err}") from av_err
+
+    raise ValueError(f"Unable to open video file at '{file_path}': {cv2_err}")

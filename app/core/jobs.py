@@ -269,17 +269,21 @@ class JobManager:
 
             ev_err = JobEvent(
                 job_id=job_id,
-                event_type="error",
+                event_type="failed",
                 progress_pct=job.progress,
                 stage="FAILED",
-                message=job.message,
-                data={"error": str(e)},
+                message=job.error,
             )
             self.broadcast_event(job_id, ev_err)
 
         finally:
             with self._lock:
-                self._active_pipelines.pop(job_id, None)
+                if job_id in self._active_pipelines:
+                    del self._active_pipelines[job_id]
+            import gc
+            if 'pipeline' in locals():
+                del pipeline
+            gc.collect()
 
     async def subscribe(self, job_id: str) -> AsyncGenerator[str, None]:
         """
