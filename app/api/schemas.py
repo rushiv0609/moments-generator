@@ -167,6 +167,8 @@ class WorkspaceSearchResultItem(BaseModel):
     scene_end: Optional[float] = None
     is_scene_representative: bool = False
     media_url: str
+    thumbnail_url: str
+    playback_url: str
 
 
 class WorkspaceSearchResponse(BaseModel):
@@ -174,4 +176,5 @@ class WorkspaceSearchResponse(BaseModel):
     workspace_dir: str
     total_results: int
     results: List[WorkspaceSearchResultItem]
+
 

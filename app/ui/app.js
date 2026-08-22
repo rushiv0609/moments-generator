@@ -1195,25 +1195,29 @@ function initMediaExplorer() {
             // Determine badge type
             let badgeClass = "explorer-badge-photo";
             let typeLabel = "Photo";
+            let isVideo = item.file_type === "video";
+            let offsetSec = item.source_offset ?? (item.scene_start ?? 0.0);
 
-            if (item.file_type === "video") {
+            if (isVideo) {
                 if (item.granularity === "scene") {
                     badgeClass = "explorer-badge-scene";
                     typeLabel = `Scene #${item.scene_id ?? 0} (${item.scene_start ?? 0}s–${item.scene_end ?? 0}s)`;
                 } else {
                     badgeClass = "explorer-badge-video";
-                    typeLabel = `Video @ ${item.source_offset}s`;
+                    typeLabel = `Video @ ${offsetSec.toFixed(1)}s`;
                 }
             }
 
             // Score badge formatting
             const scoreFormatted = item.score > 0 ? `+${item.score.toFixed(3)}` : item.score.toFixed(3);
+            const thumbSrc = item.thumbnail_url || item.media_url;
 
             card.innerHTML = `
                 <div class="explorer-thumb-wrap">
-                    <img src="${item.media_url}" class="explorer-thumb" loading="lazy" alt="${item.file_name}" onerror="this.src='data:image/svg+xml;utf8,<svg xmlns=\\'http://www.w3.org/2000/svg\\' width=\\'100\\' height=\\'100\\' fill=\\'%23555\\'><rect width=\\'100\\' height=\\'100\\'/><text x=\\'50%\\' y=\\'50%\\' dominant-baseline=\\'middle\\' text-anchor=\\'middle\\' fill=\\'%23999\\'>Preview</text></svg>'">
+                    <img src="${thumbSrc}" class="explorer-thumb" loading="lazy" alt="${item.file_name}" onerror="this.src='data:image/svg+xml;utf8,<svg xmlns=\\'http://www.w3.org/2000/svg\\' width=\\'100\\' height=\\'100\\' fill=\\'%23222\\'><rect width=\\'100\\' height=\\'100\\'/><text x=\\'50%\\' y=\\'50%\\' dominant-baseline=\\'middle\\' text-anchor=\\'middle\\' fill=\\'%23888\\'>No Frame</text></svg>'">
                     <span class="explorer-rank-badge">#${idx + 1}</span>
                     <span class="explorer-score-badge" title="Cosine Similarity Score">${scoreFormatted}</span>
+                    ${isVideo ? `<div style="position: absolute; width: 36px; height: 36px; background: rgba(0,0,0,0.65); border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 16px; color: #fff; pointer-events: none; border: 1px solid rgba(255,255,255,0.3);">▶️</div>` : ""}
                 </div>
                 <div class="explorer-card-body">
                     <div class="explorer-file-title" title="${item.file_path}">${item.file_name}</div>
@@ -1224,13 +1228,65 @@ function initMediaExplorer() {
                 </div>
             `;
 
-            // Clicking card opens full image in new browser tab
+            // Clicking card opens media
             card.style.cursor = "pointer";
             card.addEventListener("click", () => {
-                window.open(item.media_url, "_blank");
+                if (isVideo) {
+                    openVideoPlayerModal(item);
+                } else {
+                    window.open(item.media_url, "_blank");
+                }
             });
 
             grid.appendChild(card);
+        });
+    }
+
+    function openVideoPlayerModal(item) {
+        // Remove existing modal if any
+        const existing = document.getElementById("mediaVideoModal");
+        if (existing) existing.remove();
+
+        const offsetSec = item.source_offset ?? (item.scene_start ?? 0.0);
+        const modal = document.createElement("div");
+        modal.id = "mediaVideoModal";
+        modal.style.cssText = `
+            position: fixed; inset: 0; background: rgba(0, 0, 0, 0.85); backdrop-filter: blur(8px);
+            z-index: 9999; display: flex; align-items: center; justify-content: center; padding: 20px;
+        `;
+
+        modal.innerHTML = `
+            <div style="background: #111827; border: 1px solid var(--border-color); border-radius: 16px; max-width: 800px; width: 100%; overflow: hidden; box-shadow: 0 25px 50px -12px rgba(0,0,0,0.7);">
+                <div style="display: flex; justify-content: space-between; align-items: center; padding: 14px 20px; border-bottom: 1px solid var(--border-color);">
+                    <div>
+                        <h3 style="font-size: 15px; margin: 0; color: #fff;">${item.file_name}</h3>
+                        <span style="font-size: 12px; color: var(--accent-color);">Matched Frame at <strong>${offsetSec.toFixed(1)}s</strong> (Score: +${item.score.toFixed(3)})</span>
+                    </div>
+                    <button id="btnCloseVideoModal" style="background: transparent; border: none; font-size: 20px; color: #9ca3af; cursor: pointer;">✕</button>
+                </div>
+                <div style="background: #000; display: flex; justify-content: center; aspect-ratio: 16/9;">
+                    <video id="modalVideoPlayer" src="${item.media_url}" controls autoplay style="width: 100%; height: 100%; object-fit: contain;"></video>
+                </div>
+            </div>
+        `;
+
+        document.body.appendChild(modal);
+
+        const video = document.getElementById("modalVideoPlayer");
+        if (video) {
+            video.addEventListener("loadedmetadata", () => {
+                video.currentTime = offsetSec;
+                video.play().catch(() => {});
+            });
+        }
+
+        const closeBtn = document.getElementById("btnCloseVideoModal");
+        if (closeBtn) {
+            closeBtn.addEventListener("click", () => modal.remove());
+        }
+
+        modal.addEventListener("click", (e) => {
+            if (e.target === modal) modal.remove();
         });
     }
 }

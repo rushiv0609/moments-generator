@@ -346,6 +346,30 @@ async def debug_embed(
     return res
 
 
+@router.get("/debug/logs")
+def get_debug_logs(lines: int = Query(default=100, ge=1, le=1000)):
+    """
+    Retrieve the latest log lines from the server log file.
+    """
+    settings = get_settings()
+    log_file = Path(settings.DATA_DIR).resolve() / "moments_server.log"
+    if not log_file.exists():
+        return {"log_file": str(log_file), "lines_count": 0, "logs": []}
+
+    try:
+        with open(log_file, "r", encoding="utf-8", errors="replace") as f:
+            all_lines = f.readlines()
+            recent_lines = [l.rstrip("\r\n") for l in all_lines[-lines:]]
+            return {
+                "log_file": str(log_file),
+                "lines_count": len(recent_lines),
+                "logs": recent_lines,
+            }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to read log file: {e}")
+
+
+
 
 # =========================================================================
 # Milestone 4: Corpus Scanner & Metadata Extraction
@@ -493,16 +517,37 @@ def cancel_job(job_id: str) -> Dict[str, Any]:
 # =========================================================================
 
 @router.get("/media/file")
-def get_media_file(path: str = Query(..., description="Absolute path to media file")):
+def get_media_file(
+    path: str = Query(..., description="Absolute path to media file"),
+    offset: Optional[float] = Query(default=None, description="Timestamp offset in seconds for video frame preview"),
+    thumbnail: bool = Query(default=False, description="Extract a JPEG poster frame at offset"),
+):
     """
     Safely stream local photos/videos to the browser.
-    Converts Apple HEIC to JPEG on-the-fly for universal browser compatibility.
+    Extracts exact frame thumbnails at offset seconds and converts Apple HEIC on-the-fly.
     """
     p = Path(path).resolve()
     if not p.exists() or not p.is_file():
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Media file not found on disk.")
 
     suffix = p.suffix.lower()
+
+    # Exact video frame thumbnail extraction
+    if suffix in [".mp4", ".mov", ".m4v", ".avi", ".mkv"] and (thumbnail or offset is not None):
+        try:
+            import cv2
+            cap = cv2.VideoCapture(str(p))
+            target_sec = max(0.0, float(offset or 0.0))
+            cap.set(cv2.CAP_PROP_POS_MSEC, target_sec * 1000.0)
+            ret, frame = cap.read()
+            cap.release()
+
+            if ret and frame is not None:
+                _, encoded = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
+                return Response(content=encoded.tobytes(), media_type="image/jpeg")
+        except Exception as e:
+            pass
+
     if suffix in [".heic", ".heif"]:
         try:
             with Image.open(str(p)) as img:
@@ -563,6 +608,15 @@ def search_workspace_media(
 
     items = []
     for r in results:
+        target_offset = r.source_offset if r.source_offset is not None else (r.scene_start or 0.0)
+
+        if r.file_type == "video":
+            thumb_url = f"/api/v1/media/file?path={r.file_path}&offset={target_offset}&thumbnail=true"
+            playback_url = f"/api/v1/media/file?path={r.file_path}#t={target_offset}"
+        else:
+            thumb_url = f"/api/v1/media/file?path={r.file_path}"
+            playback_url = f"/api/v1/media/file?path={r.file_path}"
+
         items.append(
             WorkspaceSearchResultItem(
                 point_id=r.point_id,
@@ -578,6 +632,8 @@ def search_workspace_media(
                 scene_end=r.scene_end,
                 is_scene_representative=r.is_scene_representative,
                 media_url=f"/api/v1/media/file?path={r.file_path}",
+                thumbnail_url=thumb_url,
+                playback_url=playback_url,
             )
         )
 
