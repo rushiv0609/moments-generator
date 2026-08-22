@@ -149,6 +149,29 @@ class ProgressEvent(BaseModel):
     progress_pct: float = Field(ge=0.0, le=100.0)
     details: str
     message: Optional[str] = None
-
     eta_seconds: Optional[float] = None
     error: Optional[str] = None
+
+
+class WorkspaceSearchResultItem(BaseModel):
+    point_id: str
+    score: float
+    file_path: str
+    file_name: str
+    file_type: str
+    frame_index: int
+    source_offset: float
+    granularity: str = "frame"
+    scene_id: Optional[int] = None
+    scene_start: Optional[float] = None
+    scene_end: Optional[float] = None
+    is_scene_representative: bool = False
+    media_url: str
+
+
+class WorkspaceSearchResponse(BaseModel):
+    query: str
+    workspace_dir: str
+    total_results: int
+    results: List[WorkspaceSearchResultItem]
+

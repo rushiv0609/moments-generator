@@ -3,16 +3,18 @@ FastAPI Route Handlers for Local AI Moments Generator.
 """
 
 import os
+import io
 import shutil
 import subprocess
 import datetime
 import tempfile
 from pathlib import Path
 from typing import Dict, Any, Optional, List
+from PIL import Image
 
 import numpy as np
-from fastapi import APIRouter, HTTPException, status, File, Form, UploadFile
-from fastapi.responses import StreamingResponse
+from fastapi import APIRouter, HTTPException, status, File, Form, UploadFile, Query
+from fastapi.responses import StreamingResponse, FileResponse, Response
 from qdrant_client import QdrantClient
 
 from app.config import get_settings
@@ -34,6 +36,8 @@ from app.api.schemas import (
     WorkspaceResponse,
     IndexJobRequest,
     IndexJobResponse,
+    WorkspaceSearchResponse,
+    WorkspaceSearchResultItem,
 )
 from app.db.manifest import ManifestDB
 from app.db.qdrant import QdrantVectorDB
@@ -485,6 +489,107 @@ def cancel_job(job_id: str) -> Dict[str, Any]:
 
 
 # =========================================================================
+# Media Serving & Visual Semantic Search Explorer (Active Workspace)
+# =========================================================================
+
+@router.get("/media/file")
+def get_media_file(path: str = Query(..., description="Absolute path to media file")):
+    """
+    Safely stream local photos/videos to the browser.
+    Converts Apple HEIC to JPEG on-the-fly for universal browser compatibility.
+    """
+    p = Path(path).resolve()
+    if not p.exists() or not p.is_file():
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Media file not found on disk.")
+
+    suffix = p.suffix.lower()
+    if suffix in [".heic", ".heif"]:
+        try:
+            with Image.open(str(p)) as img:
+                img = img.convert("RGB")
+                buf = io.BytesIO()
+                img.save(buf, format="JPEG", quality=85)
+                return Response(content=buf.getvalue(), media_type="image/jpeg")
+        except Exception as e:
+            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to decode HEIC: {e}")
+    elif suffix in [".jpg", ".jpeg"]:
+        return FileResponse(str(p), media_type="image/jpeg")
+    elif suffix in [".png"]:
+        return FileResponse(str(p), media_type="image/png")
+    elif suffix in [".webp"]:
+        return FileResponse(str(p), media_type="image/webp")
+    elif suffix in [".mp4", ".m4v"]:
+        return FileResponse(str(p), media_type="video/mp4")
+    elif suffix in [".mov"]:
+        return FileResponse(str(p), media_type="video/quicktime")
+    else:
+        return FileResponse(str(p))
+
+
+@router.get("/workspace/search", response_model=WorkspaceSearchResponse)
+def search_workspace_media(
+    query: str = Query(..., min_length=1, description="Natural language semantic search query"),
+    top_k: int = Query(default=12, ge=1, le=100, description="Max ranked results to return"),
+    granularity: Optional[str] = Query(default="all", description="'all' | 'frame' | 'scene'"),
+    file_type: Optional[str] = Query(default="all", description="'all' | 'image' | 'video'"),
+):
+    """
+    Execute real-time semantic search against the active Project Workspace Qdrant vector database.
+    Embeds the user's natural language query using SigLIP 2 and returns ranked results with thumbnails.
+    """
+    workspace_mgr = get_workspace_manager()
+    if not workspace_mgr.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="No active project workspace set. Please activate a workspace first.",
+        )
+
+    qdrant = workspace_mgr.get_qdrant_db()
+    embedder = get_active_embedder()
+
+    # Compute text query embedding (L2 normalized 768-dim vector)
+    query_vec = embedder.embed_text(query)
+
+    granularity_val = None if granularity == "all" else granularity
+    file_type_val = None if file_type == "all" else file_type
+
+    results = qdrant.search(
+        collection_name="media_embeddings",
+        query_vector=query_vec,
+        limit=top_k,
+        granularity=granularity_val,
+        file_type=file_type_val,
+    )
+
+    items = []
+    for r in results:
+        items.append(
+            WorkspaceSearchResultItem(
+                point_id=r.point_id,
+                score=round(r.score, 4),
+                file_path=r.file_path,
+                file_name=Path(r.file_path).name,
+                file_type=r.file_type,
+                frame_index=r.frame_index,
+                source_offset=r.source_offset,
+                granularity=r.granularity,
+                scene_id=r.scene_id,
+                scene_start=r.scene_start,
+                scene_end=r.scene_end,
+                is_scene_representative=r.is_scene_representative,
+                media_url=f"/api/v1/media/file?path={r.file_path}",
+            )
+        )
+
+    return WorkspaceSearchResponse(
+        query=query,
+        workspace_dir=str(workspace_mgr.workspace_path),
+        total_results=len(items),
+        results=items,
+    )
+
+
+# =========================================================================
 # Milestone 9 & 10: Curation & Video Rendering Stubs
 # =========================================================================
 
@@ -508,4 +613,5 @@ def download_rendered_video(job_id: str):
         status_code=status.HTTP_501_NOT_IMPLEMENTED,
         detail="Rendered video download will be activated in Milestone 10.",
     )
+
 

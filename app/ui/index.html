@@ -50,6 +50,7 @@
             <!-- Navigation Tabs -->
             <nav class="nav-tabs">
                 <button class="tab-btn active" data-tab="pipeline">🚀 Pipeline Control</button>
+                <button class="tab-btn" data-tab="explorer">🔍 Media Search Explorer</button>
                 <button class="tab-btn" data-tab="playground">🧪 Semantic Playground</button>
                 <button class="tab-btn" data-tab="health">⚡ System & Hardware</button>
                 <button class="tab-btn" data-tab="config">⚙️ Configuration</button>
@@ -278,6 +279,98 @@
                             </div>
                         </div>
                     </div>
+                </div>
+            </section>
+
+            <!-- Tab 2: Visual Media Search Explorer (Active Workspace) -->
+            <section class="tab-pane" id="pane-explorer">
+                <!-- Search Query Card -->
+                <div class="card glass-card" style="margin-bottom: 20px; border-left: 4px solid #6366f1;">
+                    <div class="card-header">
+                        <div>
+                            <h2>🔍 Workspace Semantic Media Search</h2>
+                            <p class="card-desc" style="margin-top: 4px;">
+                                Query your active Project Workspace vector database using natural language. SigLIP 2 embeds your text and finds matching photos and video scenes instantly.
+                            </p>
+                        </div>
+                        <span class="badge badge-accent" id="explorerWsTag">Active Workspace</span>
+                    </div>
+
+                    <!-- Search Input Bar -->
+                    <div style="margin-top: 15px;">
+                        <div style="display: flex; gap: 10px;">
+                            <div style="position: relative; flex: 1;">
+                                <input type="text" id="explorerQueryInput" class="input-text" placeholder="Describe a moment (e.g., 'mountains in the snow', 'friends smiling together', 'sunset over ocean')..." style="width: 100%; font-size: 15px; padding: 12px 16px;">
+                            </div>
+                            <button type="button" class="btn btn-primary" id="btnRunExplorerSearch" style="padding: 12px 24px; font-size: 14px; font-weight: 600; background: linear-gradient(135deg, #6366f1, #8b5cf6); display: flex; align-items: center; gap: 8px;">
+                                <span>⚡ Search Media</span>
+                            </button>
+                        </div>
+
+                        <!-- Sample Prompts Chips -->
+                        <div style="display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; align-items: center;">
+                            <span style="font-size: 12px; color: var(--text-muted);">Try:</span>
+                            <button type="button" class="chip-btn" data-query="mountain views with snow">🏔️ mountain views</button>
+                            <button type="button" class="chip-btn" data-query="people smiling and laughing">😄 people smiling</button>
+                            <button type="button" class="chip-btn" data-query="sunset with golden sky">🌅 sunset golden sky</button>
+                            <button type="button" class="chip-btn" data-query="group photo of friends">📸 group photo</button>
+                            <button type="button" class="chip-btn" data-query="lush green nature and trees">🌲 green nature</button>
+                            <button type="button" class="chip-btn" data-query="food or dinner table">🍽️ food / dinner</button>
+                        </div>
+
+                        <!-- Search Controls / Filters -->
+                        <div style="display: flex; gap: 20px; flex-wrap: wrap; margin-top: 15px; padding-top: 12px; border-top: 1px solid var(--border-subtle); font-size: 13px; align-items: center;">
+                            <div style="display: flex; align-items: center; gap: 8px;">
+                                <label for="explorerGranularity" style="font-weight: 500;">Granularity:</label>
+                                <select id="explorerGranularity" class="input-select" style="padding: 4px 10px; font-size: 12px; border-radius: 6px;">
+                                    <option value="all">All (Frames + Scenes)</option>
+                                    <option value="scene">Scenes Only (PySceneDetect)</option>
+                                    <option value="frame">Frames Only (1-FPS)</option>
+                                </select>
+                            </div>
+
+                            <div style="display: flex; align-items: center; gap: 8px;">
+                                <label for="explorerFileType" style="font-weight: 500;">Media Type:</label>
+                                <select id="explorerFileType" class="input-select" style="padding: 4px 10px; font-size: 12px; border-radius: 6px;">
+                                    <option value="all">All Media (Photos & Videos)</option>
+                                    <option value="image">Photos Only</option>
+                                    <option value="video">Videos Only</option>
+                                </select>
+                            </div>
+
+                            <div style="display: flex; align-items: center; gap: 8px;">
+                                <label for="explorerTopK" style="font-weight: 500;">Results Limit:</label>
+                                <select id="explorerTopK" class="input-select" style="padding: 4px 10px; font-size: 12px; border-radius: 6px;">
+                                    <option value="8">Top 8</option>
+                                    <option value="16" selected>Top 16</option>
+                                    <option value="32">Top 32</option>
+                                    <option value="50">Top 50</option>
+                                </select>
+                            </div>
+
+                            <div id="explorerSearchStats" style="margin-left: auto; color: var(--text-muted); font-size: 12px;"></div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Search Results Grid Card -->
+                <div class="card glass-card">
+                    <div class="card-header" style="margin-bottom: 15px;">
+                        <h3 id="explorerResultsHeading">🎯 Search Results</h3>
+                        <span class="badge badge-secondary" id="explorerResultsCount">0 matches</span>
+                    </div>
+
+                    <!-- Placeholder / Empty State -->
+                    <div id="explorerEmptyState" style="text-align: center; padding: 40px 20px; color: var(--text-muted);">
+                        <div style="font-size: 40px; margin-bottom: 12px;">🔍</div>
+                        <h4>No search executed yet</h4>
+                        <p style="font-size: 13px; max-width: 400px; margin: 6px auto 0;">
+                            Type any natural language prompt above or click one of the quick suggestions to retrieve matching photos and video scenes from your workspace.
+                        </p>
+                    </div>
+
+                    <!-- Media Grid -->
+                    <div id="explorerMediaGrid" class="explorer-grid" style="display: none; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 16px;"></div>
                 </div>
             </section>
 

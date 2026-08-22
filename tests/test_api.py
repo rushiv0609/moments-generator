@@ -119,3 +119,57 @@ def test_debug_embed_endpoint(tmp_path):
     assert "similarity" in data_both
     assert isinstance(data_both["similarity"], float)
 
+
+def test_media_file_serving_endpoint(tmp_path):
+    """Verify GET /api/v1/media/file streams images and handles 404s."""
+    img_path = tmp_path / "sample_stream.jpg"
+    img = Image.new("RGB", (100, 100), color="green")
+    img.save(img_path)
+
+    # Valid file stream
+    res = client.get(f"/api/v1/media/file?path={img_path}")
+    assert res.status_code == 200
+    assert res.headers["content-type"] == "image/jpeg"
+
+    # Nonexistent file -> 404
+    res_404 = client.get("/api/v1/media/file?path=/nonexistent/file.jpg")
+    assert res_404.status_code == 404
+
+
+def test_workspace_search_endpoint(tmp_path):
+    """Verify GET /api/v1/workspace/search executes query and returns ranked media items."""
+    ws_dir = tmp_path / "search_ws"
+    corpus_dir = tmp_path / "search_corpus"
+    corpus_dir.mkdir(parents=True)
+
+    img_path = corpus_dir / "mountain.jpg"
+    img = Image.new("RGB", (224, 224), color="blue")
+    img.save(img_path)
+
+    # Set workspace
+    res_set = client.post("/api/v1/workspace/set", json={
+        "workspace_path": str(ws_dir),
+        "corpus_path": str(corpus_dir),
+    })
+    assert res_set.status_code == 200
+
+    # Scan & Index
+    res_idx = client.post("/api/v1/jobs/index", json={
+        "workspace_path": str(ws_dir),
+        "corpus_path": str(corpus_dir),
+    })
+    assert res_idx.status_code == 200
+
+    import time
+    time.sleep(2.0)  # Wait for background indexer
+
+    # Search workspace media
+    res_search = client.get("/api/v1/workspace/search?query=blue+mountain&top_k=5")
+    assert res_search.status_code == 200
+    data = res_search.json()
+    assert "query" in data
+    assert "results" in data
+    assert data["query"] == "blue mountain"
+    assert data["workspace_dir"] == str(ws_dir.resolve())
+
+

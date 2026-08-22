@@ -6,6 +6,7 @@ document.addEventListener("DOMContentLoaded", () => {
     initTabs();
     initPlayground();
     initWorkspace();
+    initMediaExplorer();
     fetchHealth();
     fetchConfig();
     fetchDataDir();
@@ -1065,4 +1066,173 @@ function dotProduct(a, b) {
     }
     return dot;
 }
+
+/* =========================================================================
+   Media Search Explorer (Active Workspace)
+   ========================================================================= */
+function initMediaExplorer() {
+    const inputQuery = document.getElementById("explorerQueryInput");
+    const btnSearch = document.getElementById("btnRunExplorerSearch");
+    const selGranularity = document.getElementById("explorerGranularity");
+    const selFileType = document.getElementById("explorerFileType");
+    const selTopK = document.getElementById("explorerTopK");
+    const emptyState = document.getElementById("explorerEmptyState");
+    const grid = document.getElementById("explorerMediaGrid");
+    const resultsHeading = document.getElementById("explorerResultsHeading");
+    const resultsCount = document.getElementById("explorerResultsCount");
+    const statsEl = document.getElementById("explorerSearchStats");
+
+    if (!btnSearch || !inputQuery) return;
+
+    // Search button click
+    btnSearch.addEventListener("click", () => {
+        executeWorkspaceSearch();
+    });
+
+    // Enter key
+    inputQuery.addEventListener("keydown", (e) => {
+        if (e.key === "Enter") {
+            e.preventDefault();
+            executeWorkspaceSearch();
+        }
+    });
+
+    // Quick chip buttons
+    document.querySelectorAll(".chip-btn").forEach((chip) => {
+        chip.addEventListener("click", () => {
+            const q = chip.getAttribute("data-query");
+            if (q) {
+                inputQuery.value = q;
+                executeWorkspaceSearch();
+            }
+        });
+    });
+
+    // Re-filter when dropdown changes
+    if (selGranularity) selGranularity.addEventListener("change", () => executeWorkspaceSearch());
+    if (selFileType) selFileType.addEventListener("change", () => executeWorkspaceSearch());
+    if (selTopK) selTopK.addEventListener("change", () => executeWorkspaceSearch());
+
+    async function executeWorkspaceSearch() {
+        const query = inputQuery.value.trim();
+        if (!query) {
+            inputQuery.focus();
+            return;
+        }
+
+        const granularity = selGranularity ? selGranularity.value : "all";
+        const fileType = selFileType ? selFileType.value : "all";
+        const topK = selTopK ? selTopK.value : 16;
+
+        btnSearch.disabled = true;
+        btnSearch.innerHTML = `<span class="spinner" style="width: 14px; height: 14px; border: 2px solid #fff; border-top-color: transparent; border-radius: 50%; display: inline-block; animation: spin 0.8s linear infinite;"></span> <span>Searching...</span>`;
+
+        const startTime = performance.now();
+
+        try {
+            const params = new URLSearchParams({
+                query: query,
+                top_k: topK,
+                granularity: granularity,
+                file_type: fileType,
+            });
+
+            const res = await fetch(`/api/v1/workspace/search?${params.toString()}`);
+            if (!res.ok) {
+                const err = await res.json();
+                throw new Error(err.detail || `HTTP ${res.status}`);
+            }
+
+            const data = await res.json();
+            const elapsed = Math.round(performance.now() - startTime);
+
+            renderExplorerResults(data, elapsed);
+        } catch (err) {
+            console.error("Workspace search error:", err);
+            emptyState.style.display = "block";
+            grid.style.display = "none";
+            emptyState.innerHTML = `
+                <div style="font-size: 32px; margin-bottom: 8px;">⚠️</div>
+                <h4 style="color: #ef4444;">Search Failed</h4>
+                <p style="font-size: 13px; color: var(--text-muted); margin-top: 4px;">${err.message}</p>
+            `;
+            resultsCount.textContent = "Error";
+            resultsCount.className = "badge badge-danger";
+        } finally {
+            btnSearch.disabled = false;
+            btnSearch.innerHTML = `<span>⚡ Search Media</span>`;
+        }
+    }
+
+    function renderExplorerResults(data, elapsedMs) {
+        const results = data.results || [];
+        resultsCount.textContent = `${results.length} matches`;
+        resultsCount.className = results.length > 0 ? "badge badge-success" : "badge badge-secondary";
+        resultsHeading.textContent = `🎯 Results for "${data.query}"`;
+        statsEl.textContent = `⚡ Search completed in ${elapsedMs}ms across ${results.length} ranked items`;
+
+        if (results.length === 0) {
+            emptyState.style.display = "block";
+            grid.style.display = "none";
+            emptyState.innerHTML = `
+                <div style="font-size: 36px; margin-bottom: 10px;">🍃</div>
+                <h4>No Matching Media Found</h4>
+                <p style="font-size: 13px; color: var(--text-muted); margin-top: 4px;">
+                    Try a different query or switch filters to 'All Media' and 'All Granularities'.
+                </p>
+            `;
+            return;
+        }
+
+        emptyState.style.display = "none";
+        grid.style.display = "grid";
+        grid.innerHTML = "";
+
+        results.forEach((item, idx) => {
+            const card = document.createElement("div");
+            card.className = "explorer-card";
+
+            // Determine badge type
+            let badgeClass = "explorer-badge-photo";
+            let typeLabel = "Photo";
+
+            if (item.file_type === "video") {
+                if (item.granularity === "scene") {
+                    badgeClass = "explorer-badge-scene";
+                    typeLabel = `Scene #${item.scene_id ?? 0} (${item.scene_start ?? 0}s–${item.scene_end ?? 0}s)`;
+                } else {
+                    badgeClass = "explorer-badge-video";
+                    typeLabel = `Video @ ${item.source_offset}s`;
+                }
+            }
+
+            // Score badge formatting
+            const scoreFormatted = item.score > 0 ? `+${item.score.toFixed(3)}` : item.score.toFixed(3);
+
+            card.innerHTML = `
+                <div class="explorer-thumb-wrap">
+                    <img src="${item.media_url}" class="explorer-thumb" loading="lazy" alt="${item.file_name}" onerror="this.src='data:image/svg+xml;utf8,<svg xmlns=\\'http://www.w3.org/2000/svg\\' width=\\'100\\' height=\\'100\\' fill=\\'%23555\\'><rect width=\\'100\\' height=\\'100\\'/><text x=\\'50%\\' y=\\'50%\\' dominant-baseline=\\'middle\\' text-anchor=\\'middle\\' fill=\\'%23999\\'>Preview</text></svg>'">
+                    <span class="explorer-rank-badge">#${idx + 1}</span>
+                    <span class="explorer-score-badge" title="Cosine Similarity Score">${scoreFormatted}</span>
+                </div>
+                <div class="explorer-card-body">
+                    <div class="explorer-file-title" title="${item.file_path}">${item.file_name}</div>
+                    <div class="explorer-meta-row">
+                        <span class="explorer-badge-type ${badgeClass}">${typeLabel}</span>
+                        <span style="font-family: var(--font-mono); font-size: 10px; color: var(--text-muted);">${item.granularity}</span>
+                    </div>
+                </div>
+            `;
+
+            // Clicking card opens full image in new browser tab
+            card.style.cursor = "pointer";
+            card.addEventListener("click", () => {
+                window.open(item.media_url, "_blank");
+            });
+
+            grid.appendChild(card);
+        });
+    }
+}
+
 
