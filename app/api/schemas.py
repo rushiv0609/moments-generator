@@ -111,21 +111,43 @@ class ScanResponse(BaseModel):
 
 
 class GenerateRequest(BaseModel):
-    corpus_path: str = Field(..., description="Absolute path to media folder on the local machine")
+    corpus_path: Optional[str] = Field(default=None, description="Absolute path to media folder on the local machine")
     workspace_path: Optional[str] = Field(default=None, description="Absolute path for project workspace directory")
     prompt: str = Field(..., min_length=1, description="Natural language search prompt describing the moment")
-    target_duration_seconds: int = Field(default=60, ge=5, le=300, description="Target duration of highlight video in seconds")
+    target_duration_seconds: int = Field(default=30, ge=5, le=300, description="Target duration of highlight video in seconds")
     aspect_ratio: Literal["1:1", "16:9", "9:16"] = Field(default="1:1", description="Target video aspect ratio")
-    force_reindex: bool = Field(default=False, description="Whether to bypass manifest checkpoint cache and recompute embeddings")
+    model_name: str = Field(default="gemma4:e4b-mlx", description="Model name (Ollama tag, gemini-*, or groq:*)")
+    api_key: Optional[str] = Field(default=None, description="Optional custom runtime API key for cloud providers")
+    retrieval_mode: str = Field(default="dual", description="'scene' | 'frame' | 'dual' | 'all_alternatives'")
+    generate_alternatives: bool = Field(default=True, description="Generate Alt-A, Alt-B, Alt-C in parallel")
+
+
+class DirectorModelItem(BaseModel):
+    name: str
+    display_name: str
+    size_vram: str
+    provider: str = "ollama"  # "ollama" | "gemini" | "groq" | "mock"
+    recommended: bool = False
+    installed: bool = False
+    description: str
+
+
+class DirectorModelsResponse(BaseModel):
+    ollama_connected: bool
+    gemini_configured: bool = False
+    groq_configured: bool = False
+    default_model: str
+    models: List[DirectorModelItem]
 
 
 class JobResponse(BaseModel):
     job_id: str
-    status: Literal["QUEUED", "SCANNING", "INDEXING", "CURATING", "RENDERING", "COMPLETED", "FAILED"]
-    corpus_path: str
+    status: str
+    corpus_path: Optional[str] = None
     prompt: str
-    created_at: str
+    created_at: float
     message: str
+    workspace_dir: Optional[str] = None
 
 
 class IndexJobRequest(BaseModel):

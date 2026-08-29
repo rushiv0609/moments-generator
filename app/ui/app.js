@@ -7,6 +7,7 @@ document.addEventListener("DOMContentLoaded", () => {
     initPlayground();
     initWorkspace();
     initMediaExplorer();
+    initDirectorStudio();
     fetchHealth();
     fetchConfig();
     fetchDataDir();
@@ -1512,5 +1513,1085 @@ function initMediaExplorer() {
         });
     }
 }
+
+// =========================================================================
+// Milestone 9: LangGraph AI Director Studio Controller
+// =========================================================================
+
+let currentDirectorJobData = null;
+let activeAlternativeKey = "alt_c_dual";
+let directorTimerInterval = null;
+
+function initDirectorStudio() {
+    fetchDirectorModels();
+
+    // Suggestion pills
+    document.querySelectorAll(".prompt-suggestion").forEach(btn => {
+        btn.addEventListener("click", () => {
+            const prompt = btn.getAttribute("data-prompt");
+            const promptInput = document.getElementById("directorPrompt");
+            if (promptInput && prompt) {
+                promptInput.value = prompt;
+                promptInput.focus();
+            }
+        });
+    });
+
+    // Form submit
+    const directorForm = document.getElementById("directorForm");
+    if (directorForm) {
+        directorForm.addEventListener("submit", (e) => {
+            e.preventDefault();
+            runDirectorAgent();
+        });
+    }
+
+    // Alternative Switcher Buttons
+    document.querySelectorAll(".alt-btn").forEach(btn => {
+        btn.addEventListener("click", () => {
+            const altKey = btn.getAttribute("data-alt");
+            switchAlternativeView(altKey);
+        });
+    });
+
+    // Inspector toggle and clear
+    const btnToggle = document.getElementById("btnToggleInspector");
+    if (btnToggle) {
+        btnToggle.addEventListener("click", () => {
+            const logBox = document.getElementById("inspectorLogContainer");
+            const metricsRow = document.getElementById("inspectorMetricsRow");
+            if (logBox) {
+                const isHidden = logBox.style.display === "none";
+                logBox.style.display = isHidden ? "block" : "none";
+                if (metricsRow) metricsRow.style.display = isHidden ? "grid" : "none";
+                btnToggle.textContent = isHidden ? "Hide Inspector" : "Show Inspector";
+            }
+        });
+    }
+
+    const btnClear = document.getElementById("btnClearInspector");
+    if (btnClear) {
+        btnClear.addEventListener("click", () => {
+            resetDirectorInspector();
+        });
+    }
+
+    const btnPlayAll = document.getElementById("btnPlayAllStoryboard");
+    if (btnPlayAll) {
+        btnPlayAll.addEventListener("click", () => {
+            openFullStoryboardPlayer();
+        });
+    }
+
+    initCloudApiKeysUi();
+}
+
+// Initialize Cloud Key Drawer listeners & persistence
+function initCloudApiKeysUi() {
+    const toggleBtn = document.getElementById("toggleCloudKeysBtn");
+    const content = document.getElementById("cloudKeysContent");
+    const arrow = document.getElementById("cloudKeysToggleArrow");
+    const geminiInput = document.getElementById("geminiApiKeyInput");
+    const groqInput = document.getElementById("groqApiKeyInput");
+    const btnSaveGemini = document.getElementById("btnSaveGeminiKey");
+    const btnSaveGroq = document.getElementById("btnSaveGroqKey");
+    const badge = document.getElementById("cloudKeysBadge");
+
+    if (toggleBtn && content) {
+        toggleBtn.addEventListener("click", () => {
+            const isHidden = content.style.display === "none";
+            content.style.display = isHidden ? "grid" : "none";
+            if (arrow) arrow.textContent = isHidden ? "▲ Collapse" : "▼ Expand";
+        });
+    }
+
+    // Load saved keys from localStorage
+    const savedGemini = localStorage.getItem("moments_gemini_api_key") || "";
+    const savedGroq = localStorage.getItem("moments_groq_api_key") || "";
+    if (geminiInput && savedGemini) geminiInput.value = savedGemini;
+    if (groqInput && savedGroq) groqInput.value = savedGroq;
+
+    const updateBadge = () => {
+        const hasGemini = !!(geminiInput?.value || savedGemini);
+        const hasGroq = !!(groqInput?.value || savedGroq);
+        if (badge) {
+            if (hasGemini && hasGroq) {
+                badge.style.background = "rgba(16, 185, 129, 0.2)";
+                badge.style.color = "#34d399";
+                badge.textContent = "✨ Gemini & ⚡ Groq Configured";
+            } else if (hasGemini) {
+                badge.style.background = "rgba(56, 189, 248, 0.2)";
+                badge.style.color = "#7dd3fc";
+                badge.textContent = "✨ Gemini Active";
+            } else if (hasGroq) {
+                badge.style.background = "rgba(245, 158, 11, 0.2)";
+                badge.style.color = "#fcd34d";
+                badge.textContent = "⚡ Groq Active";
+            } else {
+                badge.style.background = "rgba(99, 102, 241, 0.2)";
+                badge.style.color = "#a5b4fc";
+                badge.textContent = "Offline / Local Mode";
+            }
+        }
+    };
+    updateBadge();
+
+    if (btnSaveGemini && geminiInput) {
+        btnSaveGemini.addEventListener("click", () => {
+            const val = geminiInput.value.trim();
+            localStorage.setItem("moments_gemini_api_key", val);
+            btnSaveGemini.textContent = "Saved ✓";
+            setTimeout(() => { btnSaveGemini.textContent = "Save"; }, 1500);
+            updateBadge();
+        });
+    }
+
+    if (btnSaveGroq && groqInput) {
+        btnSaveGroq.addEventListener("click", () => {
+            const val = groqInput.value.trim();
+            localStorage.setItem("moments_groq_api_key", val);
+            btnSaveGroq.textContent = "Saved ✓";
+            setTimeout(() => { btnSaveGroq.textContent = "Save"; }, 1500);
+            updateBadge();
+        });
+    }
+}
+
+async function fetchDirectorModels() {
+    try {
+        const resp = await fetch("/api/v1/director/models");
+        if (!resp.ok) return;
+        const data = await resp.json();
+
+        const modelSelect = document.getElementById("directorModelSelect");
+        const statusBadge = document.getElementById("directorOllamaStatus");
+        const modelBadge = document.getElementById("directorModelBadge");
+
+        if (statusBadge) {
+            if (data.ollama_connected) {
+                statusBadge.className = "badge badge-success";
+                statusBadge.textContent = "🟢 Ollama Connected";
+            } else {
+                statusBadge.className = "badge badge-warning";
+                statusBadge.textContent = "⚪ Mock / Offline Mode";
+            }
+        }
+
+        if (modelBadge && data.default_model) {
+            modelBadge.textContent = `🤖 LLM: ${data.default_model}`;
+        }
+
+        if (modelSelect && data.models && data.models.length > 0) {
+            modelSelect.innerHTML = "";
+
+            // Group by provider
+            const groups = {
+                "gemini": { label: "✨ Google Gemini Cloud (Fast & Cinematic)", items: [] },
+                "groq": { label: "⚡ Groq Cloud (Sub-Second LPUs)", items: [] },
+                "ollama": { label: "🏠 Local Apple Silicon (Ollama)", items: [] },
+                "mock": { label: "🧪 Simulation", items: [] },
+            };
+
+            data.models.forEach(m => {
+                const prov = m.provider || "ollama";
+                if (groups[prov]) {
+                    groups[prov].items.push(m);
+                } else {
+                    groups["ollama"].items.push(m);
+                }
+            });
+
+            Object.keys(groups).forEach(gKey => {
+                const grp = groups[gKey];
+                if (grp.items.length > 0) {
+                    const optgroup = document.createElement("optgroup");
+                    optgroup.label = grp.label;
+
+                    grp.items.forEach(m => {
+                        const opt = document.createElement("option");
+                        opt.value = m.name;
+                        opt.textContent = `${m.display_name} (${m.size_vram})`;
+                        if (m.name === data.default_model) {
+                            opt.selected = true;
+                        }
+                        optgroup.appendChild(opt);
+                    });
+
+                    modelSelect.appendChild(optgroup);
+                }
+            });
+        }
+    } catch (err) {
+        console.warn("Failed fetching director models:", err);
+    }
+}
+
+async function runDirectorAgent() {
+    const prompt = document.getElementById("directorPrompt")?.value?.trim();
+    if (!prompt) {
+        alert("Please enter a creative director prompt!");
+        return;
+    }
+
+    const duration = parseInt(document.getElementById("directorDuration")?.value || "30", 10);
+    const model = document.getElementById("directorModelSelect")?.value || "gemma4:e4b-mlx";
+    const mode = document.getElementById("directorRetrievalMode")?.value || "dual";
+    const aspectRatio = document.getElementById("directorAspectRatio")?.value || "1:1";
+
+    // Determine if custom API key is available
+    let apiKey = null;
+    if (model.startsWith("gemini")) {
+        apiKey = document.getElementById("geminiApiKeyInput")?.value?.trim() || localStorage.getItem("moments_gemini_api_key") || null;
+    } else if (model.startsWith("groq")) {
+        apiKey = document.getElementById("groqApiKeyInput")?.value?.trim() || localStorage.getItem("moments_groq_api_key") || null;
+    }
+
+    const stateCard = document.getElementById("directorStateCard");
+    const resultsContainer = document.getElementById("directorResultsContainer");
+    const runBtn = document.getElementById("btnRunDirector");
+    const liveMsg = document.getElementById("directorLiveMessage");
+    const timerElem = document.getElementById("directorExecutionTimer");
+
+    if (stateCard) stateCard.style.display = "block";
+    if (resultsContainer) resultsContainer.style.display = "none";
+    if (runBtn) {
+        runBtn.disabled = true;
+        runBtn.textContent = "⏳ Directing...";
+    }
+
+    // Reset flowchart nodes and live inspector
+    resetFlowchartNodes();
+    resetDirectorInspector();
+    updateFlowchartNode("planner", "active");
+
+    let startTime = Date.now();
+    if (directorTimerInterval) clearInterval(directorTimerInterval);
+    directorTimerInterval = setInterval(() => {
+        const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+        if (timerElem) timerElem.textContent = `${elapsed}s`;
+    }, 100);
+
+    try {
+        const payload = {
+            prompt: prompt,
+            target_duration_seconds: duration,
+            aspect_ratio: aspectRatio,
+            model_name: model,
+            retrieval_mode: mode,
+            generate_alternatives: true,
+        };
+        if (apiKey) {
+            payload.api_key = apiKey;
+        }
+
+        const resp = await fetch("/api/v1/jobs/generate", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload),
+        });
+
+        if (!resp.ok) {
+            const errData = await resp.json().catch(() => ({}));
+            throw new Error(errData.detail || `Server returned ${resp.status}`);
+        }
+
+        const job = await resp.json();
+        console.log("Director job created:", job.job_id);
+
+        // Subscribe to SSE stream
+        subscribeToDirectorEvents(job.job_id);
+
+    } catch (err) {
+        clearInterval(directorTimerInterval);
+        if (runBtn) {
+            runBtn.disabled = false;
+            runBtn.textContent = "🚀 Direct Video";
+        }
+        if (liveMsg) liveMsg.textContent = `❌ Error: ${err.message}`;
+        alert(`Failed starting Director: ${err.message}`);
+    }
+}
+
+let totalLLMLatency = 0.0;
+let totalVectorLatency = 0.0;
+
+function resetDirectorInspector() {
+    totalLLMLatency = 0.0;
+    totalVectorLatency = 0.0;
+    const logBox = document.getElementById("inspectorLogContainer");
+    if (logBox) logBox.innerHTML = "<div style='color: #64748b;'>[Init] Directing video state machine started...</div>";
+    const qList = document.getElementById("inspectorQueriesList");
+    if (qList) qList.innerHTML = "<span style='color: #64748b;'>Executing visual queries...</span>";
+    const pPrev = document.getElementById("inspectorPromptPreview");
+    if (pPrev) pPrev.innerHTML = "<span style='color: #64748b;'>Awaiting LLM calls...</span>";
+    const mLLM = document.getElementById("metricLLMLatency");
+    if (mLLM) mLLM.textContent = "0.00s";
+    const mVec = document.getElementById("metricVectorLatency");
+    if (mVec) mVec.textContent = "0.00s";
+    const mCand = document.getElementById("metricCandidatesCount");
+    if (mCand) mCand.textContent = "0 items";
+    const mBadge = document.getElementById("inspectorLatencyBadge");
+    if (mBadge) mBadge.textContent = "⏱️ Latency: 0.0s";
+}
+
+function handleDirectorTelemetryEvent(data) {
+    if (!data) return;
+    const node = data.node || "AGENT";
+    const summary = data.summary || "";
+    const latency = parseFloat(data.latency_seconds || 0);
+
+    const now = new Date().toTimeString().split(" ")[0];
+
+    // Colors per node
+    let badgeColor = "#94a3b8";
+    let badgeBg = "rgba(148, 163, 184, 0.2)";
+    if (node === "PLANNER") { badgeColor = "#c084fc"; badgeBg = "rgba(192, 132, 252, 0.2)"; totalLLMLatency += latency; }
+    else if (node === "RETRIEVAL") { badgeColor = "#38bdf8"; badgeBg = "rgba(56, 189, 248, 0.2)"; totalVectorLatency += latency; }
+    else if (node === "DRAFTING") { badgeColor = "#fbbf24"; badgeBg = "rgba(251, 191, 36, 0.2)"; totalLLMLatency += latency; }
+    else if (node === "EDITOR") { badgeColor = "#34d399"; badgeBg = "rgba(52, 211, 153, 0.2)"; totalLLMLatency += latency; }
+    else if (node === "COMPILER") { badgeColor = "#4ade80"; badgeBg = "rgba(74, 222, 128, 0.2)"; }
+
+    // Update metrics counters
+    const mLLM = document.getElementById("metricLLMLatency");
+    if (mLLM) mLLM.textContent = `${totalLLMLatency.toFixed(2)}s`;
+    const mVec = document.getElementById("metricVectorLatency");
+    if (mVec) mVec.textContent = `${totalVectorLatency.toFixed(2)}s`;
+    const mBadge = document.getElementById("inspectorLatencyBadge");
+    if (mBadge) mBadge.textContent = `⏱️ Latency: ${(totalLLMLatency + totalVectorLatency).toFixed(2)}s`;
+
+    // Append to live terminal log
+    const logBox = document.getElementById("inspectorLogContainer");
+    if (logBox) {
+        const line = document.createElement("div");
+        line.style.cssText = "margin-bottom: 4px; display: flex; gap: 6px; align-items: baseline; word-break: break-word;";
+        line.innerHTML = `<span style="color: #64748b; font-size: 10px;">[${now}]</span>` +
+            `<span style="background: ${badgeBg}; color: ${badgeColor}; padding: 1px 5px; border-radius: 3px; font-weight: bold; font-size: 10px;">[${node}]</span>` +
+            `<span>${summary}</span>`;
+        logBox.appendChild(line);
+        logBox.scrollTop = logBox.scrollHeight;
+    }
+
+    // If query breakdown provided
+    if (data.query_breakdown && data.query_breakdown.length > 0) {
+        const qList = document.getElementById("inspectorQueriesList");
+        const qCount = document.getElementById("inspectorQueryCountBadge");
+        if (qCount) qCount.textContent = `${data.query_breakdown.length} Queries`;
+        if (qList) {
+            qList.innerHTML = "";
+            data.query_breakdown.forEach((qb, i) => {
+                const item = document.createElement("div");
+                item.style.cssText = "background: rgba(30, 41, 59, 0.7); padding: 4px 8px; border-radius: 4px; font-size: 10.5px; border-left: 2px solid #38bdf8;";
+                item.innerHTML = `<strong>Q${i+1}:</strong> "${qb.query}" <span style="color: #94a3b8; font-size: 10px;">(${qb.embed_ms}ms | 🎬 ${qb.matched_scenes} scenes, 🖼️ ${qb.matched_frames} frames)</span>`;
+                qList.appendChild(item);
+            });
+        }
+    }
+
+    if (data.total_candidates !== undefined) {
+        const mCand = document.getElementById("metricCandidatesCount");
+        if (mCand) mCand.textContent = `${data.total_candidates} items`;
+    }
+
+    // If LLM telemetry provided
+    if (data.llm_telemetry && data.llm_telemetry.full_prompt) {
+        const pPrev = document.getElementById("inspectorPromptPreview");
+        const sBadge = document.getElementById("inspectorLLMSchemaBadge");
+        const mModel = document.getElementById("metricLLMModel");
+        if (mModel && data.llm_telemetry.model) mModel.textContent = data.llm_telemetry.model;
+        if (sBadge && data.llm_telemetry.schema) sBadge.textContent = `${data.llm_telemetry.schema} (${data.llm_telemetry.latency_seconds}s)`;
+        if (pPrev) {
+            pPrev.textContent = `[System Prompt]\n${data.llm_telemetry.system_prompt || ''}\n\n[User Prompt]\n${data.llm_telemetry.full_prompt}\n\n[Response Schema]\n${JSON.stringify(data.llm_telemetry.response_json, null, 2)}`;
+        }
+    }
+}
+
+function subscribeToDirectorEvents(jobId) {
+    const liveMsg = document.getElementById("directorLiveMessage");
+    const pbar = document.getElementById("directorProgressBar");
+    const stageBadge = document.getElementById("directorLiveStageBadge");
+    const runBtn = document.getElementById("btnRunDirector");
+
+    resetDirectorInspector();
+
+    const eventSource = new EventSource(`/api/v1/jobs/${jobId}/events`);
+
+    eventSource.onmessage = (event) => {
+        try {
+            const payload = JSON.parse(event.data);
+            console.log("[Director SSE]", payload);
+
+            if (pbar && payload.progress_pct !== undefined) {
+                pbar.style.width = `${payload.progress_pct}%`;
+            }
+
+            if (liveMsg && payload.message) {
+                liveMsg.textContent = payload.message;
+            }
+
+            if (stageBadge && payload.stage) {
+                stageBadge.textContent = payload.stage;
+            }
+
+            // If telemetry event
+            if (payload.event_type === "telemetry" && payload.data) {
+                handleDirectorTelemetryEvent(payload.data);
+            }
+
+            // Flowchart stage mapping
+            const stage = (payload.stage || "").toUpperCase();
+            if (stage === "PLANNING") {
+                updateFlowchartNode("planner", "active");
+            } else if (stage === "RETRIEVAL") {
+                updateFlowchartNode("planner", "completed");
+                updateFlowchartNode("retrieval", "active");
+            } else if (stage === "DRAFTING") {
+                updateFlowchartNode("retrieval", "completed");
+                updateFlowchartNode("drafting", "active");
+            } else if (stage === "EDITING") {
+                updateFlowchartNode("drafting", "completed");
+                updateFlowchartNode("editor", "active");
+            } else if (stage === "COMPILING") {
+                updateFlowchartNode("editor", "completed");
+                updateFlowchartNode("compiler", "active");
+            } else if (payload.event_type === "completed" || (stage === "COMPLETED" && payload.event_type !== "telemetry")) {
+                updateFlowchartNode("editor", "completed");
+                updateFlowchartNode("compiler", "completed");
+                clearInterval(directorTimerInterval);
+                eventSource.close();
+
+                if (runBtn) {
+                    runBtn.disabled = false;
+                    runBtn.textContent = "🚀 Direct Video";
+                }
+
+                // Render final results
+                if (payload.data) {
+                    currentDirectorJobData = payload.data;
+                    renderDirectorResults(payload.data);
+                    // Render any remaining agent telemetry logs
+                    if (payload.data.agent_telemetry) {
+                        payload.data.agent_telemetry.forEach(t => handleDirectorTelemetryEvent(t));
+                    }
+                }
+            } else if (stage === "FAILED" || payload.event_type === "error") {
+                clearInterval(directorTimerInterval);
+                eventSource.close();
+                if (runBtn) {
+                    runBtn.disabled = false;
+                    runBtn.textContent = "🚀 Direct Video";
+                }
+                alert(`Director Job Failed: ${payload.message}`);
+            }
+        } catch (e) {
+            console.error("Error parsing SSE event:", e);
+        }
+    };
+
+    eventSource.onerror = async (err) => {
+        console.warn("Director EventSource error / closed:", err);
+        eventSource.close();
+
+        // Fallback: poll job status once in case SSE closed after job completed
+        try {
+            const resp = await fetch(`/api/v1/jobs/${jobId}`);
+            if (resp.ok) {
+                const jobData = await resp.json();
+                if (jobData.status === "COMPLETED" && jobData.summary) {
+                    updateFlowchartNode("editor", "completed");
+                    updateFlowchartNode("compiler", "completed");
+                    clearInterval(directorTimerInterval);
+                    if (runBtn) {
+                        runBtn.disabled = false;
+                        runBtn.textContent = "🚀 Direct Video";
+                    }
+                    currentDirectorJobData = jobData.summary;
+                    renderDirectorResults(jobData.summary);
+                } else if (jobData.status === "FAILED") {
+                    clearInterval(directorTimerInterval);
+                    if (runBtn) {
+                        runBtn.disabled = false;
+                        runBtn.textContent = "🚀 Direct Video";
+                    }
+                    alert(`Director Job Failed: ${jobData.error || jobData.message}`);
+                }
+            }
+        } catch (e) {
+            console.error("Fallback job poll failed:", e);
+        }
+    };
+}
+
+function resetFlowchartNodes() {
+    ["planner", "retrieval", "drafting", "editor", "compiler"].forEach(name => {
+        const node = document.getElementById(`node-${name}`);
+        if (node) {
+            node.className = "graph-node-card";
+        }
+    });
+}
+
+function updateFlowchartNode(name, status) {
+    const node = document.getElementById(`node-${name}`);
+    if (node) {
+        node.classList.remove("active", "completed");
+        node.classList.add(status);
+    }
+}
+
+function renderDirectorResults(data) {
+    if (!data) return;
+    currentDirectorJobData = data;
+    console.log("[Director UI] Rendering Results:", data);
+
+    const resultsContainer = document.getElementById("directorResultsContainer");
+    if (!resultsContainer) return;
+    resultsContainer.style.display = "block";
+
+    // Narrative & Sub-queries
+    const narrativeElem = document.getElementById("directorNarrativeArcText");
+    if (narrativeElem) {
+        narrativeElem.textContent = `"${data.narrative_arc || 'Cinematic moments sequence tailored to prompt.'}"`;
+    }
+
+    const queriesContainer = document.getElementById("directorSubQueriesList");
+    if (queriesContainer && data.search_queries) {
+        queriesContainer.innerHTML = "";
+        data.search_queries.forEach((q, idx) => {
+            const pill = document.createElement("div");
+            pill.style.cssText = "display: flex; align-items: center; gap: 8px; font-size: 12px; background: rgba(99, 102, 241, 0.1); padding: 5px 10px; border-radius: 6px; border-left: 2px solid #6366f1;";
+            pill.innerHTML = `<span>🔍 [Query ${idx + 1}]</span> <strong style="color: #c7d2fe;">${q}</strong>`;
+            queriesContainer.appendChild(pill);
+        });
+    }
+
+    // Editor Critique
+    const feedbackBox = document.getElementById("editorFeedbackBox");
+    if (feedbackBox) {
+        if (data.editor_feedback && data.editor_feedback.length > 0) {
+            feedbackBox.innerHTML = "<strong>Editorial Feedback:</strong><ul style='margin-left: 15px; margin-top: 4px;'>" +
+                data.editor_feedback.map(f => `<li>${f}</li>`).join("") + "</ul>";
+            feedbackBox.style.background = "rgba(245, 158, 11, 0.1)";
+            feedbackBox.style.borderLeftColor = "#f59e0b";
+            feedbackBox.style.color = "#fef3c7";
+        } else {
+            feedbackBox.innerHTML = "✅ Storyboard passed all duration, pacing, and visual diversity checks!";
+            feedbackBox.style.background = "rgba(16, 185, 129, 0.1)";
+            feedbackBox.style.borderLeftColor = "#10b981";
+            feedbackBox.style.color = "#a7f3d0";
+        }
+    }
+
+    // Default display Alternative C
+    activeAlternativeKey = (data.alternatives && data.alternatives["alt_c_dual"]) ? "alt_c_dual" : "alt_a_scene";
+    switchAlternativeView(activeAlternativeKey);
+}
+
+function switchAlternativeView(altKey) {
+    if (!currentDirectorJobData) return;
+    activeAlternativeKey = altKey;
+
+    // Update active tab buttons
+    document.querySelectorAll(".alt-btn").forEach(btn => {
+        if (btn.getAttribute("data-alt") === altKey) {
+            btn.classList.add("active");
+        } else {
+            btn.classList.remove("active");
+        }
+    });
+
+    let currentAltState = null;
+    if (currentDirectorJobData.alternatives && currentDirectorJobData.alternatives[altKey]) {
+        currentAltState = currentDirectorJobData.alternatives[altKey];
+    } else {
+        currentAltState = currentDirectorJobData;
+    }
+
+    const storyboard = currentAltState.storyboard || [];
+    const targetDur = currentDirectorJobData.target_duration || 30;
+    const totalDur = storyboard.reduce((acc, s) => acc + (s.duration || 0), 0);
+
+    // Update summary banner
+    const durElem = document.getElementById("storyboardDuration");
+    const targetElem = document.getElementById("storyboardTargetDur");
+    const segCountElem = document.getElementById("storyboardSegmentsCount");
+    const approvalElem = document.getElementById("storyboardApprovalBadge");
+
+    if (durElem) durElem.textContent = `${totalDur.toFixed(1)}s`;
+    if (targetElem) targetElem.textContent = `${targetDur}`;
+    if (segCountElem) segCountElem.textContent = `${storyboard.length}`;
+    if (approvalElem) {
+        const iter = currentAltState.iteration_count || 1;
+        approvalElem.textContent = currentAltState.approved ? `✅ Approved (Iter ${iter})` : `⚠️ Auto-Compiled`;
+    }
+
+    // Render Filmstrip Grid
+    const filmstrip = document.getElementById("storyboardFilmstrip");
+    if (!filmstrip) return;
+    filmstrip.innerHTML = "";
+
+    if (storyboard.length === 0) {
+        filmstrip.innerHTML = `<div style="grid-column: 1 / -1; padding: 20px; text-align: center; color: var(--text-muted);">No segments drafted for this alternative.</div>`;
+        return;
+    }
+
+    storyboard.forEach((seg, idx) => {
+        const card = document.createElement("div");
+        card.className = "storyboard-card";
+
+        const fileName = seg.file_path ? seg.file_path.split("/").pop() : "Unknown";
+        const thumbUrl = `/api/v1/media/thumbnail?path=${encodeURIComponent(seg.file_path || '')}&offset=${seg.start_offset || 0}`;
+        const mediaUrl = `/api/v1/media/file?path=${encodeURIComponent(seg.file_path || '')}`;
+        const typeBadge = seg.segment_type === "video_clip" ? "🎥 Video Clip" : "📸 Photo";
+        const stratBadge = seg.retrieval_strategy === "scene" ? "Scene" : "Frame";
+
+        let dateBadge = "";
+        if (seg.creation_timestamp) {
+            try {
+                const dt = new Date(seg.creation_timestamp * 1000);
+                const dStr = dt.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+                const tStr = dt.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+                dateBadge = `<span style="font-size: 9px; color: #38bdf8; background: rgba(56, 189, 248, 0.15); padding: 1px 4px; border-radius: 3px;">📅 ${dStr} ${tStr}</span>`;
+            } catch (e) {}
+        }
+
+        const scoreStr = (seg.similarity_score !== undefined && seg.similarity_score !== null)
+            ? `<span style="font-size: 9px; color: #a7f3d0; background: rgba(16, 185, 129, 0.15); padding: 1px 4px; border-radius: 3px;">★ ${(seg.similarity_score).toFixed(3)}</span>`
+            : "";
+
+        card.innerHTML = `
+            <div class="storyboard-thumb-container">
+                <img src="${thumbUrl}" alt="${fileName}" class="storyboard-thumb" loading="lazy" onerror="this.src='data:image/svg+xml;utf8,<svg xmlns=\\'http://www.w3.org/2000/svg\\' width=\\'100\\' height=\\'100\\' fill=\\'%23333\\'><rect width=\\'100\\' height=\\'100\\'/></svg>'">
+                <span class="storyboard-badge-pos">#${idx + 1}</span>
+                <span class="storyboard-badge-dur">${(seg.duration || 3.0).toFixed(1)}s</span>
+            </div>
+            <div class="storyboard-content">
+                <div style="display: flex; justify-content: space-between; align-items: center; gap: 4px;">
+                    <strong style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 120px; font-size: 11px;" title="${fileName}">${fileName}</strong>
+                    <span style="font-size: 9px; padding: 1px 4px; border-radius: 3px; background: rgba(99, 102, 241, 0.2); color: #a5b4fc;">${stratBadge}</span>
+                </div>
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 2px;">
+                    ${dateBadge || `<span style="font-size: 9px; color: var(--text-muted);">${typeBadge}</span>`}
+                    ${scoreStr}
+                </div>
+                <div class="storyboard-justification" title="${seg.justification || ''}" style="margin-top: 4px;">
+                    "${seg.justification || 'Key highlight matching narrative intent.'}"
+                </div>
+            </div>
+        `;
+
+        // Click to view
+        card.addEventListener("click", () => {
+            openDirectorMediaModal({
+                file_path: seg.file_path,
+                file_name: fileName,
+                media_url: mediaUrl,
+                thumb_url: thumbUrl,
+                is_video: seg.segment_type === "video_clip",
+                start_offset: seg.start_offset || 0,
+                duration: seg.duration || 3.0,
+                end_offset: seg.end_offset || ((seg.start_offset || 0) + (seg.duration || 3.0)),
+                score: seg.similarity_score || 0.9,
+                justification: seg.justification || "",
+                creation_timestamp: seg.creation_timestamp,
+            });
+        });
+
+        filmstrip.appendChild(card);
+    });
+}
+
+async function openDirectorMediaModal(item) {
+    const existing = document.getElementById("directorMediaModal");
+    if (existing) existing.remove();
+
+    const modal = document.createElement("div");
+    modal.id = "directorMediaModal";
+    modal.style.cssText = `
+        position: fixed; inset: 0; background: rgba(0, 0, 0, 0.92); backdrop-filter: blur(14px);
+        z-index: 9999; display: flex; align-items: center; justify-content: center; padding: 20px;
+    `;
+
+    const clipUrl = `/api/v1/media/clip?path=${encodeURIComponent(item.file_path || '')}&start_offset=${item.start_offset || 0}&duration=${item.duration || 3.0}`;
+    const startSec = item.start_offset || 0;
+    const endSec = item.end_offset || (startSec + item.duration);
+
+    modal.innerHTML = `
+        <div style="background: #0f172a; border: 1px solid var(--border-color); border-radius: 16px; max-width: 960px; width: 100%; overflow: hidden; box-shadow: 0 25px 50px -12px rgba(0,0,0,0.9); display: flex; flex-direction: column;">
+            <div style="display: flex; justify-content: space-between; align-items: center; padding: 14px 20px; border-bottom: 1px solid var(--border-color); background: rgba(255,255,255,0.03);">
+                <div>
+                    <h3 style="font-size: 15px; margin: 0; color: #fff; display: flex; align-items: center; gap: 8px;">
+                        <span id="modalTypeIcon">${item.is_video ? '🎥' : '📸'}</span>
+                        <span>${item.file_name}</span>
+                        <span id="livePhotoBadge" style="display: none; font-size: 10px; background: rgba(239, 68, 68, 0.2); color: #f87171; border: 1px solid rgba(239, 68, 68, 0.4); padding: 1px 6px; border-radius: 10px; font-weight: bold; cursor: pointer;">
+                            🔴 LIVE PHOTO
+                        </span>
+                    </h3>
+                    <span style="font-size: 12px; color: #94a3b8;" id="modalTimeSubtitle">
+                        ${item.is_video ? `Curated Clip: <strong>${startSec.toFixed(1)}s ➔ ${endSec.toFixed(1)}s</strong> (${item.duration.toFixed(1)}s)` : `Photo Moment • Duration: ${item.duration.toFixed(1)}s`}
+                    </span>
+                </div>
+                <div style="display: flex; gap: 8px; align-items: center;">
+                    ${item.is_video ? `
+                    <button type="button" id="btnToggleLoopMode" class="btn btn-secondary" style="padding: 4px 10px; font-size: 11px; background: rgba(99, 102, 241, 0.2); color: #c7d2fe;">
+                        🔁 Loop Clip
+                    </button>
+                    <button type="button" id="btnPlayFullVideo" class="btn btn-secondary" style="padding: 4px 10px; font-size: 11px;">
+                        ▶ Full Video
+                    </button>
+                    ` : `
+                    <button type="button" id="btnToggleLivePhotoMotion" class="btn btn-secondary" style="display: none; padding: 4px 10px; font-size: 11px; background: rgba(239, 68, 68, 0.2); color: #fca5a5;">
+                        ▶ Play Motion
+                    </button>
+                    `}
+                    <button id="btnCloseDirectorModal" style="background: transparent; border: none; font-size: 22px; color: #9ca3af; cursor: pointer; padding: 4px 8px;">✕</button>
+                </div>
+            </div>
+
+            <!-- Media Viewport -->
+            <div id="modalMediaViewport" style="background: #000; display: flex; justify-content: center; align-items: center; min-height: 380px; max-height: 70vh; position: relative;">
+                ${item.is_video ? `
+                <video id="directorModalVideo" src="${item.media_url}" controls playsinline preload="auto" style="width: 100%; height: 100%; max-height: 70vh; object-fit: contain;"></video>
+                <img id="directorModalFallbackImg" src="${clipUrl}" style="display: none; width: 100%; height: 100%; max-height: 70vh; object-fit: contain;" alt="${item.file_name}">
+                ` : `
+                <img id="directorModalPhoto" src="${item.media_url}" alt="${item.file_name}" style="width: 100%; height: 100%; max-height: 70vh; object-fit: contain;">
+                <video id="directorModalLiveVideo" playsinline loop style="display: none; width: 100%; height: 100%; max-height: 70vh; object-fit: contain;"></video>
+                `}
+            </div>
+
+            <!-- Storyboard Details Footer -->
+            <div style="padding: 12px 20px; background: rgba(15, 23, 42, 0.8); border-top: 1px solid var(--border-color); display: flex; justify-content: space-between; align-items: center; font-size: 12px;">
+                <div style="color: #cbd5e1; max-width: 80%;">
+                    ${item.justification ? `<strong style="color: #a5b4fc;">Director Rationale:</strong> "${item.justification}"` : `<span style="color: #64748b;">Selected moment from narrative sequence.</span>`}
+                </div>
+                ${item.score ? `<span style="color: #34d399; font-weight: bold; background: rgba(16, 185, 129, 0.15); padding: 2px 8px; border-radius: 4px;">★ ${(item.score).toFixed(3)} match</span>` : ''}
+            </div>
+        </div>
+    `;
+
+    document.body.appendChild(modal);
+
+    let isLoopingClip = true;
+
+    // Check Live Photo info asynchronously
+    try {
+        const infoResp = await fetch(`/api/v1/media/info?path=${encodeURIComponent(item.file_path || '')}`);
+        if (infoResp.ok) {
+            const info = await infoResp.json();
+            if (info.has_live_photo) {
+                const liveBadge = document.getElementById("livePhotoBadge");
+                const liveBtn = document.getElementById("btnToggleLivePhotoMotion");
+                const liveVideo = document.getElementById("directorModalLiveVideo");
+                const photoImg = document.getElementById("directorModalPhoto");
+
+                if (liveBadge) liveBadge.style.display = "inline-block";
+                if (liveBtn) {
+                    liveBtn.style.display = "inline-block";
+                    let isPlayingMotion = false;
+
+                    const toggleMotion = () => {
+                        isPlayingMotion = !isPlayingMotion;
+                        if (isPlayingMotion && liveVideo && photoImg) {
+                            photoImg.style.display = "none";
+                            liveVideo.style.display = "block";
+                            liveVideo.src = info.live_photo_url || info.media_url;
+                            liveVideo.play().catch(() => {});
+                            liveBtn.textContent = "📸 Show Photo";
+                        } else if (liveVideo && photoImg) {
+                            liveVideo.pause();
+                            liveVideo.style.display = "none";
+                            photoImg.style.display = "block";
+                            liveBtn.textContent = "▶ Play Motion";
+                        }
+                    };
+
+                    liveBtn.addEventListener("click", toggleMotion);
+                    if (liveBadge) liveBadge.addEventListener("click", toggleMotion);
+                }
+            }
+        }
+    } catch (e) {
+        console.debug("Live photo check:", e);
+    }
+
+    if (item.is_video) {
+        const video = document.getElementById("directorModalVideo");
+        const fallbackImg = document.getElementById("directorModalFallbackImg");
+        const btnLoop = document.getElementById("btnToggleLoopMode");
+        const btnFull = document.getElementById("btnPlayFullVideo");
+
+        if (btnLoop) {
+            btnLoop.addEventListener("click", () => {
+                isLoopingClip = true;
+                btnLoop.style.background = "rgba(99, 102, 241, 0.4)";
+                if (btnFull) btnFull.style.background = "";
+                if (video) {
+                    video.currentTime = startSec;
+                    video.play().catch(() => {});
+                }
+            });
+        }
+
+        if (btnFull) {
+            btnFull.addEventListener("click", () => {
+                isLoopingClip = false;
+                if (btnLoop) btnLoop.style.background = "";
+                btnFull.style.background = "rgba(99, 102, 241, 0.4)";
+                if (video) {
+                    video.currentTime = 0;
+                    video.play().catch(() => {});
+                }
+            });
+        }
+
+        if (video) {
+            video.addEventListener("loadedmetadata", () => {
+                video.currentTime = startSec;
+                video.play().catch(() => {});
+            });
+
+            video.addEventListener("timeupdate", () => {
+                if (isLoopingClip && endSec > startSec) {
+                    if (video.currentTime >= endSec) {
+                        video.currentTime = startSec;
+                    }
+                }
+            });
+
+            // If browser video decoder fails (e.g. unsupported QuickTime HEVC in older browser), switch seamlessly to animated clip
+            video.addEventListener("error", () => {
+                console.warn("Native video decode failed, switching to high-def animated clip stream...");
+                video.style.display = "none";
+                if (fallbackImg) {
+                    fallbackImg.style.display = "block";
+                }
+            });
+        }
+    }
+
+    const closeBtn = document.getElementById("btnCloseDirectorModal");
+    if (closeBtn) {
+        closeBtn.addEventListener("click", () => modal.remove());
+    }
+
+    modal.addEventListener("click", (e) => {
+        if (e.target === modal) modal.remove();
+    });
+}
+
+// Full Timeline Storyboard Cinema Player
+function openFullStoryboardPlayer() {
+    if (!currentDirectorJobData) {
+        alert("No active storyboard generated yet. Run Direct Video first!");
+        return;
+    }
+
+    let currentAltState = null;
+    if (currentDirectorJobData.alternatives && currentDirectorJobData.alternatives[activeAlternativeKey]) {
+        currentAltState = currentDirectorJobData.alternatives[activeAlternativeKey];
+    } else {
+        currentAltState = currentDirectorJobData;
+    }
+
+    const storyboard = currentAltState.storyboard || [];
+    if (storyboard.length === 0) {
+        alert("Storyboard is empty.");
+        return;
+    }
+
+    const existing = document.getElementById("directorCinemaModal");
+    if (existing) existing.remove();
+
+    const totalDur = storyboard.reduce((acc, s) => acc + (s.duration || 0), 0);
+
+    const modal = document.createElement("div");
+    modal.id = "directorCinemaModal";
+    modal.style.cssText = `
+        position: fixed; inset: 0; background: rgba(0, 0, 0, 0.95); backdrop-filter: blur(16px);
+        z-index: 10000; display: flex; flex-direction: column; align-items: center; justify-content: space-between; padding: 20px;
+    `;
+
+    modal.innerHTML = `
+        <!-- Top Bar -->
+        <div style="width: 100%; max-width: 1100px; display: flex; justify-content: space-between; align-items: center; color: #fff;">
+            <div>
+                <h3 style="margin: 0; font-size: 16px; display: flex; align-items: center; gap: 8px;">
+                    <span>🎬 Full Storyboard Cinema</span>
+                    <span style="font-size: 11px; padding: 2px 8px; border-radius: 4px; background: rgba(16, 185, 129, 0.2); color: #34d399;">
+                        ${activeAlternativeKey.toUpperCase()} Cut (${totalDur.toFixed(1)}s)
+                    </span>
+                </h3>
+                <span id="cinemaClipTitle" style="font-size: 12px; color: #94a3b8;">Loading timeline...</span>
+            </div>
+            <button id="btnCloseCinemaModal" style="background: transparent; border: none; font-size: 26px; color: #cbd5e1; cursor: pointer; padding: 4px 10px;">✕</button>
+        </div>
+
+        <!-- Cinema Viewport -->
+        <div style="width: 100%; max-width: 1100px; flex: 1; display: flex; justify-content: center; align-items: center; position: relative; margin: 15px 0;">
+            <img id="cinemaPhotoElem" style="max-width: 100%; max-height: 70vh; object-fit: contain; border-radius: 8px; display: none; box-shadow: 0 20px 40px rgba(0,0,0,0.8);">
+            <video id="cinemaVideoElem" playsinline preload="auto" style="max-width: 100%; max-height: 70vh; object-fit: contain; border-radius: 8px; display: none; box-shadow: 0 20px 40px rgba(0,0,0,0.8);"></video>
+            
+            <div id="cinemaOverlayBadge" style="position: absolute; bottom: 20px; left: 30px; background: rgba(0, 0, 0, 0.7); backdrop-filter: blur(8px); padding: 6px 14px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.1); color: #fff; font-size: 12px;">
+                Clip 1 of ${storyboard.length}
+            </div>
+        </div>
+
+        <!-- Bottom Controls & Timeline Bar -->
+        <div style="width: 100%; max-width: 1100px; background: rgba(15, 23, 42, 0.85); border: 1px solid var(--border-color); border-radius: 12px; padding: 14px 20px; display: flex; flex-direction: column; gap: 10px;">
+            <!-- Progress Bar -->
+            <div style="height: 6px; background: rgba(255, 255, 255, 0.1); border-radius: 3px; overflow: hidden; position: relative; cursor: pointer;" id="cinemaProgressBar">
+                <div id="cinemaProgressFill" style="height: 100%; width: 0%; background: linear-gradient(90deg, #38bdf8, #10b981); transition: width 0.1s linear;"></div>
+            </div>
+
+            <!-- Control Buttons -->
+            <div style="display: flex; justify-content: space-between; align-items: center;">
+                <div style="display: flex; gap: 10px; align-items: center;">
+                    <button type="button" id="btnCinemaPrev" class="btn btn-secondary" style="padding: 6px 12px; font-size: 12px;">⏮ Prev</button>
+                    <button type="button" id="btnCinemaPlayPause" class="btn btn-primary" style="padding: 6px 16px; font-size: 13px; font-weight: bold;">⏸ Pause</button>
+                    <button type="button" id="btnCinemaNext" class="btn btn-secondary" style="padding: 6px 12px; font-size: 12px;">Next ⏭</button>
+                </div>
+                <div style="font-size: 12px; color: #94a3b8;">
+                    <span id="cinemaTimeElapsed">0.0s</span> / <strong>${totalDur.toFixed(1)}s</strong>
+                </div>
+            </div>
+        </div>
+    `;
+
+    document.body.appendChild(modal);
+
+    let currentIndex = 0;
+    let isPlaying = true;
+    let segmentTimer = null;
+    let overallTimer = null;
+    let elapsedSeconds = 0.0;
+
+    const photoElem = document.getElementById("cinemaPhotoElem");
+    const videoElem = document.getElementById("cinemaVideoElem");
+    const titleElem = document.getElementById("cinemaClipTitle");
+    const badgeElem = document.getElementById("cinemaOverlayBadge");
+    const progressFill = document.getElementById("cinemaProgressFill");
+    const timeElapsedElem = document.getElementById("cinemaTimeElapsed");
+    const btnPlayPause = document.getElementById("btnCinemaPlayPause");
+
+    function playSegment(index) {
+        if (index < 0 || index >= storyboard.length) {
+            // Reached end of cut
+            currentIndex = 0;
+            elapsedSeconds = 0.0;
+            if (progressFill) progressFill.style.width = "100%";
+            if (btnPlayPause) btnPlayPause.textContent = "🔄 Replay";
+            isPlaying = false;
+            return;
+        }
+
+        currentIndex = index;
+        const seg = storyboard[currentIndex];
+        const fileName = seg.file_path ? seg.file_path.split("/").pop() : "Moment";
+        const isVideo = seg.segment_type === "video_clip";
+        const segDur = seg.duration || 3.0;
+
+        if (titleElem) {
+            titleElem.textContent = `[${currentIndex + 1}/${storyboard.length}] ${fileName} • ${seg.justification || ''}`;
+        }
+        if (badgeElem) {
+            badgeElem.textContent = `Moment ${currentIndex + 1} of ${storyboard.length} (${segDur.toFixed(1)}s)`;
+        }
+
+        if (segmentTimer) clearTimeout(segmentTimer);
+
+        if (isVideo && videoElem) {
+            if (photoElem) photoElem.style.display = "none";
+            videoElem.style.display = "block";
+            const startOff = seg.start_offset || 0;
+            videoElem.src = `/api/v1/media/file?path=${encodeURIComponent(seg.file_path || '')}`;
+            videoElem.currentTime = startOff;
+            videoElem.play().catch(() => {});
+
+            videoElem.onerror = () => {
+                // Fallback to animated clip
+                videoElem.style.display = "none";
+                if (photoElem) {
+                    photoElem.style.display = "block";
+                    photoElem.src = `/api/v1/media/clip?path=${encodeURIComponent(seg.file_path || '')}&start_offset=${startOff}&duration=${segDur}`;
+                }
+            };
+
+            segmentTimer = setTimeout(() => {
+                if (isPlaying) {
+                    playSegment(currentIndex + 1);
+                }
+            }, segDur * 1000);
+
+        } else if (photoElem) {
+            if (videoElem) {
+                videoElem.pause();
+                videoElem.style.display = "none";
+            }
+            photoElem.style.display = "block";
+            photoElem.src = `/api/v1/media/file?path=${encodeURIComponent(seg.file_path || '')}`;
+
+            segmentTimer = setTimeout(() => {
+                if (isPlaying) {
+                    playSegment(currentIndex + 1);
+                }
+            }, segDur * 1000);
+        }
+    }
+
+    // Play/Pause button
+    if (btnPlayPause) {
+        btnPlayPause.addEventListener("click", () => {
+            if (isPlaying) {
+                isPlaying = false;
+                btnPlayPause.textContent = "▶ Play";
+                if (segmentTimer) clearTimeout(segmentTimer);
+                if (videoElem) videoElem.pause();
+            } else {
+                isPlaying = true;
+                btnPlayPause.textContent = "⏸ Pause";
+                playSegment(currentIndex);
+            }
+        });
+    }
+
+    // Prev / Next buttons
+    const btnPrev = document.getElementById("btnCinemaPrev");
+    const btnNext = document.getElementById("btnCinemaNext");
+    if (btnPrev) {
+        btnPrev.addEventListener("click", () => {
+            playSegment(Math.max(0, currentIndex - 1));
+        });
+    }
+    if (btnNext) {
+        btnNext.addEventListener("click", () => {
+            playSegment(Math.min(storyboard.length - 1, currentIndex + 1));
+        });
+    }
+
+    // Progress bar loop
+    overallTimer = setInterval(() => {
+        if (isPlaying && totalDur > 0) {
+            elapsedSeconds = Math.min(totalDur, elapsedSeconds + 0.1);
+            if (timeElapsedElem) timeElapsedElem.textContent = `${elapsedSeconds.toFixed(1)}s`;
+            if (progressFill) progressFill.style.width = `${(elapsedSeconds / totalDur) * 100}%`;
+        }
+    }, 100);
+
+    const closeBtn = document.getElementById("btnCloseCinemaModal");
+    const cleanup = () => {
+        if (segmentTimer) clearTimeout(segmentTimer);
+        if (overallTimer) clearInterval(overallTimer);
+        if (videoElem) videoElem.pause();
+        modal.remove();
+    };
+
+    if (closeBtn) closeBtn.addEventListener("click", cleanup);
+    modal.addEventListener("click", (e) => {
+        if (e.target === modal) cleanup();
+    });
+
+    // Start playback
+    playSegment(0);
+}
+
 
 

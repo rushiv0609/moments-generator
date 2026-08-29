@@ -109,6 +109,11 @@ class WorkspaceManager:
     def corpus_path(self) -> Optional[Path]:
         return self._corpus_path
 
+    @property
+    def collection_name(self) -> str:
+        """The standard Qdrant collection name for project media embeddings."""
+        return "media_embeddings"
+
     def set_workspace(
         self,
         workspace_path: Union[str, Path],

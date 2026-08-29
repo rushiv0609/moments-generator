@@ -7,8 +7,31 @@ from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 
+import threading
+from contextlib import asynccontextmanager
+
 from app.config import get_settings
 from app.api.routes import router as api_router
+from app.core.ollama_service import ensure_ollama_running, stop_ollama
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Application lifespan managing background daemon dependencies."""
+    settings = get_settings()
+    data_dir = Path(settings.DATA_DIR).resolve()
+
+    # Launch Ollama in non-blocking background thread on startup
+    threading.Thread(
+        target=ensure_ollama_running,
+        kwargs={"log_dir": data_dir},
+        daemon=True,
+    ).start()
+
+    yield
+
+    # Clean shutdown
+    stop_ollama()
 
 
 def setup_logging(data_dir: Path):
@@ -52,6 +75,7 @@ def create_app() -> FastAPI:
         description="Offline, hardware-accelerated moments video generation on Apple Silicon using SigLIP 2.",
         version="0.1.0",
         debug=settings.DEBUG,
+        lifespan=lifespan,
     )
 
     # Enable CORS for local UI and development

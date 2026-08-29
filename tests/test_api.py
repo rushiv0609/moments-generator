@@ -68,18 +68,34 @@ def test_scan_api_endpoint(tmp_path):
     assert data["files"][0]["file_type"] == "image"
 
 
-def test_job_stubs_return_501():
-    """Verify future milestone stubs return 501 Not Implemented."""
+def test_director_models_and_generation_endpoints(tmp_path):
+    """Verify director models discovery and generate job launching."""
+    # 1. Test director models discovery
+    res_models = client.get("/api/v1/director/models")
+    assert res_models.status_code == 200
+    data_models = res_models.json()
+    assert "models" in data_models
+    assert len(data_models["models"]) >= 1
+    model_names = [m["name"] for m in data_models["models"]]
+    assert "gemini-3.7-flash" in model_names
+
+    # 2. Test generate endpoint with workspace
     res_gen = client.post("/api/v1/jobs/generate", json={
-        "corpus_path": "/fake/path",
+        "workspace_path": str(tmp_path / "test_ws"),
+        "corpus_path": str(tmp_path / "test_corpus"),
         "prompt": "sunset on the beach",
-        "target_duration_seconds": 60,
+        "target_duration_seconds": 30,
+        "model_name": "mock",
     })
-    assert res_gen.status_code == 501
+    assert res_gen.status_code == 200
+    data_gen = res_gen.json()
+    assert "job_id" in data_gen
+    assert data_gen["status"] in ("QUEUED", "RUNNING")
 
     res_events = client.get("/api/v1/jobs/nonexistent-id/events")
     assert res_events.status_code == 404
 
+    # 3. Video download stub is Milestone 10 (returns 501)
     res_dl = client.get("/api/v1/jobs/test-id/download")
     assert res_dl.status_code == 501
 
@@ -121,15 +137,26 @@ def test_debug_embed_endpoint(tmp_path):
 
 
 def test_media_file_serving_endpoint(tmp_path):
-    """Verify GET /api/v1/media/file streams images and handles 404s."""
+    """Verify GET /api/v1/media/file streams images, supports HEAD probing, and handles 404s."""
     img_path = tmp_path / "sample_stream.jpg"
     img = Image.new("RGB", (100, 100), color="green")
     img.save(img_path)
 
-    # Valid file stream
+    # Valid file stream (GET)
     res = client.get(f"/api/v1/media/file?path={img_path}")
     assert res.status_code == 200
     assert res.headers["content-type"] == "image/jpeg"
+
+    # Valid file stream (HEAD)
+    res_head = client.head(f"/api/v1/media/file?path={img_path}")
+    assert res_head.status_code == 200
+
+    # Test /api/v1/media/info
+    res_info = client.get(f"/api/v1/media/info?path={img_path}")
+    assert res_info.status_code == 200
+    info_data = res_info.json()
+    assert info_data["is_video"] is False
+    assert info_data["has_live_photo"] is False
 
     # Nonexistent file -> 404
     res_404 = client.get("/api/v1/media/file?path=/nonexistent/file.jpg")

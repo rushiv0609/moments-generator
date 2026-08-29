@@ -50,6 +50,7 @@
             <!-- Navigation Tabs -->
             <nav class="nav-tabs">
                 <button class="tab-btn active" data-tab="pipeline">🚀 Pipeline Control</button>
+                <button class="tab-btn" data-tab="director">🎬 AI Director Studio</button>
                 <button class="tab-btn" data-tab="explorer">🔍 Media Search Explorer</button>
                 <button class="tab-btn" data-tab="playground">🧪 Semantic Playground</button>
                 <button class="tab-btn" data-tab="health">⚡ System & Hardware</button>
@@ -275,6 +276,330 @@
                                 <div class="step-content">
                                     <h3>3. Local Vector Indexing</h3>
                                     <p>Qdrant vector collection with SQLite crash-safe state checkpointing.</p>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Tab: LangGraph AI Director Studio (Milestone 9) -->
+            <section class="tab-pane" id="pane-director">
+                <!-- Director Prompt & Config Card -->
+                <div class="card glass-card" style="margin-bottom: 20px; border-left: 4px solid #8b5cf6;">
+                    <div class="card-header">
+                        <h2>🎬 LangGraph AI Director Studio</h2>
+                        <div style="display: flex; gap: 8px; align-items: center;">
+                            <span class="badge" id="directorModelBadge" style="background: rgba(139, 92, 246, 0.2); color: #c4b5fd;">🤖 Local LLM: Checking...</span>
+                            <span class="badge badge-success" id="directorOllamaStatus">🟢 Ready</span>
+                        </div>
+                    </div>
+                    <p class="card-desc">
+                        Autonomous multi-agent director that plans storylines, executes dual-granularity retrieval against your indexed media, drafts cinematic storyboards, and iterates through editorial critiques.
+                    </p>
+
+                    <form id="directorForm" class="form-grid" style="margin-top: 15px;">
+                        <div class="form-group">
+                            <label for="directorPrompt"><strong>Creative Director Prompt / Theme</strong></label>
+                            <div style="display: flex; gap: 8px;">
+                                <input type="text" id="directorPrompt" class="input-text"
+                                    placeholder="e.g. Scenic mountain road trip with joyful friendship moments and golden hour sunset"
+                                    value="Scenic outdoor road trip and joyful moments" style="flex: 1;">
+                                <button type="submit" class="btn btn-primary" id="btnRunDirector" style="padding: 0 24px; background: linear-gradient(135deg, #8b5cf6, #ec4899); font-weight: 600;">
+                                    🚀 Direct Video
+                                </button>
+                            </div>
+                            <!-- Prompt Inspiration Pills -->
+                            <div style="display: flex; gap: 6px; margin-top: 8px; flex-wrap: wrap; align-items: center;">
+                                <span style="font-size: 11px; color: var(--text-muted);">Quick Prompts:</span>
+                                <button type="button" class="tag-pill prompt-suggestion" data-prompt="Epic mountain peaks and scenic hiking trails">⛰️ Mountain Peaks</button>
+                                <button type="button" class="tag-pill prompt-suggestion" data-prompt="Sunset golden hour and relaxing vibes">🌅 Sunset Golden Hour</button>
+                                <button type="button" class="tag-pill prompt-suggestion" data-prompt="Friends laughing candidly and having fun">🎉 Friends Having Fun</button>
+                                <button type="button" class="tag-pill prompt-suggestion" data-prompt="Delicious food and cozy cafe moments">☕ Food & Coffee</button>
+                            </div>
+                        </div>
+
+                        <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 15px; margin-top: 10px;">
+                            <div class="form-group">
+                                <label for="directorDuration">Target Duration</label>
+                                <select id="directorDuration" class="input-select">
+                                    <option value="15">15s (Quick Reel)</option>
+                                    <option value="30" selected>30s (Montage)</option>
+                                    <option value="60">60s (Standard Video)</option>
+                                    <option value="90">90s (Extended Story)</option>
+                                    <option value="120">2 minutes (Cinema Cut)</option>
+                                </select>
+                            </div>
+
+                            <div class="form-group">
+                                <label for="directorModelSelect">LLM Engine</label>
+                                <select id="directorModelSelect" class="input-select">
+                                    <option value="qwen3.5:9b" selected>Qwen 3.5 9B Vision-Language (Recommended)</option>
+                                    <option value="gemma4:e4b">Gemma 4 E4B</option>
+                                    <option value="gemma4:e2b">Gemma 4 E2B (Ultra Lightweight)</option>
+                                    <option value="mock">Mock Director (Instant Demo)</option>
+                                </select>
+                            </div>
+
+                            <div class="form-group">
+                                <label for="directorRetrievalMode">Retrieval Granularity</label>
+                                <select id="directorRetrievalMode" class="input-select">
+                                    <option value="dual" selected>🌟 Dual (Scenes + Frames)</option>
+                                    <option value="scene">🎥 Scene-Level Only (Cinematic)</option>
+                                    <option value="frame">⚡ Frame-Level Only (Highlights)</option>
+                                </select>
+                            </div>
+
+                            <div class="form-group">
+                                <label for="directorAspectRatio">Aspect Ratio</label>
+                                <select id="directorAspectRatio" class="input-select">
+                                    <option value="1:1" selected>1:1 Square (Feed)</option>
+                                    <option value="16:9">16:9 Landscape (TV/YouTube)</option>
+                                    <option value="9:16">9:16 Vertical (Reels/TikTok)</option>
+                                </select>
+                            </div>
+                        </div>
+
+                        <!-- Cloud API Keys Drawer (Optional for Gemini / Groq) -->
+                        <div id="cloudApiKeysDrawer" style="margin-top: 15px; padding: 12px; background: rgba(15, 23, 42, 0.5); border: 1px solid var(--border-subtle); border-radius: 8px;">
+                            <div style="display: flex; justify-content: space-between; align-items: center; cursor: pointer;" id="toggleCloudKeysBtn">
+                                <div style="display: flex; align-items: center; gap: 8px;">
+                                    <span style="font-size: 14px;">🔑</span>
+                                    <strong style="font-size: 12px; color: #cbd5e1;">Cloud LLM API Keys (Optional: Gemini 2.0 & Groq LPUs)</strong>
+                                    <span class="badge" id="cloudKeysBadge" style="font-size: 10px; background: rgba(99, 102, 241, 0.2); color: #a5b4fc;">Offline / Local Mode</span>
+                                </div>
+                                <span id="cloudKeysToggleArrow" style="font-size: 11px; color: var(--text-muted);">▼ Expand</span>
+                            </div>
+
+                            <div id="cloudKeysContent" style="display: none; margin-top: 12px; grid-template-columns: 1fr 1fr; gap: 15px;">
+                                <div class="form-group" style="margin-bottom: 0;">
+                                    <label for="geminiApiKeyInput" style="font-size: 11px; display: flex; justify-content: space-between;">
+                                        <span>✨ Google Gemini API Key</span>
+                                        <a href="https://aistudio.google.com/app/apikey" target="_blank" style="color: #38bdf8; font-size: 10px; text-decoration: none;">Get Free Key ↗</a>
+                                    </label>
+                                    <div style="display: flex; gap: 6px;">
+                                        <input type="password" id="geminiApiKeyInput" class="input-text" placeholder="AIzaSy..." style="font-size: 11px; font-family: monospace;">
+                                        <button type="button" id="btnSaveGeminiKey" class="btn btn-secondary" style="padding: 4px 10px; font-size: 11px;">Save</button>
+                                    </div>
+                                </div>
+
+                                <div class="form-group" style="margin-bottom: 0;">
+                                    <label for="groqApiKeyInput" style="font-size: 11px; display: flex; justify-content: space-between;">
+                                        <span>⚡ Groq Cloud API Key</span>
+                                        <a href="https://console.groq.com/keys" target="_blank" style="color: #f59e0b; font-size: 10px; text-decoration: none;">Get Free Key ↗</a>
+                                    </label>
+                                    <div style="display: flex; gap: 6px;">
+                                        <input type="password" id="groqApiKeyInput" class="input-text" placeholder="gsk_..." style="font-size: 11px; font-family: monospace;">
+                                        <button type="button" id="btnSaveGroqKey" class="btn btn-secondary" style="padding: 4px 10px; font-size: 11px;">Save</button>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </form>
+                </div>
+
+                <!-- Live State Machine Visualizer Card -->
+                <div class="card glass-card" id="directorStateCard" style="display: none; margin-bottom: 20px; border-left: 4px solid #ec4899;">
+                    <div class="card-header">
+                        <h2>🔄 LangGraph State Machine Execution</h2>
+                        <div style="display: flex; gap: 8px; align-items: center;">
+                            <span class="badge" id="directorLiveStageBadge" style="background: #8b5cf6; color: white;">RUNNING</span>
+                            <span id="directorExecutionTimer" style="font-family: monospace; font-size: 13px; color: var(--text-muted);">0.0s</span>
+                        </div>
+                    </div>
+
+                    <!-- Visual Flowchart Node Steps -->
+                    <div class="flowchart-container" style="display: grid; grid-template-columns: repeat(5, 1fr); gap: 10px; margin: 15px 0;">
+                        <div class="graph-node-card" id="node-planner" style="padding: 12px 8px; background: var(--bg-tertiary); border-radius: 8px; border: 1px solid var(--border-subtle); text-align: center;">
+                            <div style="font-size: 20px; margin-bottom: 4px;">🧠</div>
+                            <div style="font-weight: 600; font-size: 12px; color: var(--text-primary);">1. Planner</div>
+                            <div class="node-status" style="font-size: 10px; color: var(--text-muted); margin-top: 2px;">Sub-Queries</div>
+                        </div>
+
+                        <div class="graph-node-card" id="node-retrieval" style="padding: 12px 8px; background: var(--bg-tertiary); border-radius: 8px; border: 1px solid var(--border-subtle); text-align: center;">
+                            <div style="font-size: 20px; margin-bottom: 4px;">🔍</div>
+                            <div style="font-weight: 600; font-size: 12px; color: var(--text-primary);">2. Retrieval v2</div>
+                            <div class="node-status" style="font-size: 10px; color: var(--text-muted); margin-top: 2px;">Dual-Granularity</div>
+                        </div>
+
+                        <div class="graph-node-card" id="node-drafting" style="padding: 12px 8px; background: var(--bg-tertiary); border-radius: 8px; border: 1px solid var(--border-subtle); text-align: center;">
+                            <div style="font-size: 20px; margin-bottom: 4px;">✍️</div>
+                            <div style="font-weight: 600; font-size: 12px; color: var(--text-primary);">3. Drafting</div>
+                            <div class="node-status" style="font-size: 10px; color: var(--text-muted); margin-top: 2px;">Storyboard Assembly</div>
+                        </div>
+
+                        <div class="graph-node-card" id="node-editor" style="padding: 12px 8px; background: var(--bg-tertiary); border-radius: 8px; border: 1px solid var(--border-subtle); text-align: center;">
+                            <div style="font-size: 20px; margin-bottom: 4px;">⚖️</div>
+                            <div style="font-weight: 600; font-size: 12px; color: var(--text-primary);">4. Editor Critique</div>
+                            <div class="node-status" style="font-size: 10px; color: var(--text-muted); margin-top: 2px;">Quality Loop</div>
+                        </div>
+
+                        <div class="graph-node-card" id="node-compiler" style="padding: 12px 8px; background: var(--bg-tertiary); border-radius: 8px; border: 1px solid var(--border-subtle); text-align: center;">
+                            <div style="font-size: 20px; margin-bottom: 4px;">📦</div>
+                            <div style="font-weight: 600; font-size: 12px; color: var(--text-primary);">5. Compiler</div>
+                            <div class="node-status" style="font-size: 10px; color: var(--text-muted); margin-top: 2px;">Manifest & EDL</div>
+                        </div>
+                    </div>
+
+                    <!-- Progress bar -->
+                    <div class="progress-bar-container" style="margin-bottom: 12px;">
+                        <div class="progress-bar" id="directorProgressBar" style="width: 0%; background: linear-gradient(90deg, #8b5cf6, #ec4899);"></div>
+                    </div>
+
+                    <div id="directorLiveMessage" style="font-size: 12px; color: #c4b5fd; font-family: monospace;">
+                        [Director Agent] Initializing state machine...
+                    </div>
+
+                    <!-- Live Agent Reasoning & Query Inspector Panel -->
+                    <div id="agentInspectorPanel" style="margin-top: 15px; border-top: 1px solid var(--border-subtle); padding-top: 12px;">
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                            <div style="display: flex; align-items: center; gap: 8px;">
+                                <h3 style="font-size: 13px; font-weight: 600; color: #f43f5e; margin: 0;">🧠 Live Agent Telemetry & Reasoning Inspector</h3>
+                                <span class="badge" id="inspectorLatencyBadge" style="background: rgba(244, 63, 94, 0.15); color: #fda4af; font-family: monospace; font-size: 11px;">⏱️ Latency: 0.0s</span>
+                            </div>
+                            <div style="display: flex; gap: 6px;">
+                                <button type="button" id="btnToggleInspector" class="btn btn-secondary" style="padding: 2px 8px; font-size: 11px;">Hide Inspector</button>
+                                <button type="button" id="btnClearInspector" class="btn btn-secondary" style="padding: 2px 8px; font-size: 11px;">Clear Log</button>
+                            </div>
+                        </div>
+
+                        <!-- Live Metrics Row -->
+                        <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-bottom: 10px;" id="inspectorMetricsRow">
+                            <div class="step-card" style="padding: 6px 10px; background: rgba(15, 23, 42, 0.6); border: 1px solid var(--border-subtle);">
+                                <span style="font-size: 10px; color: var(--text-muted); text-transform: uppercase;">LLM Model</span>
+                                <div id="metricLLMModel" style="font-size: 12px; font-weight: 600; color: #a78bfa; font-family: monospace;">-</div>
+                            </div>
+                            <div class="step-card" style="padding: 6px 10px; background: rgba(15, 23, 42, 0.6); border: 1px solid var(--border-subtle);">
+                                <span style="font-size: 10px; color: var(--text-muted); text-transform: uppercase;">LLM Total Latency</span>
+                                <div id="metricLLMLatency" style="font-size: 12px; font-weight: 600; color: #38bdf8; font-family: monospace;">0.00s</div>
+                            </div>
+                            <div class="step-card" style="padding: 6px 10px; background: rgba(15, 23, 42, 0.6); border: 1px solid var(--border-subtle);">
+                                <span style="font-size: 10px; color: var(--text-muted); text-transform: uppercase;">Vector Search Time</span>
+                                <div id="metricVectorLatency" style="font-size: 12px; font-weight: 600; color: #34d399; font-family: monospace;">0.00s</div>
+                            </div>
+                            <div class="step-card" style="padding: 6px 10px; background: rgba(15, 23, 42, 0.6); border: 1px solid var(--border-subtle);">
+                                <span style="font-size: 10px; color: var(--text-muted); text-transform: uppercase;">Candidates Retrieved</span>
+                                <div id="metricCandidatesCount" style="font-size: 12px; font-weight: 600; color: #f59e0b; font-family: monospace;">0 items</div>
+                            </div>
+                        </div>
+
+                        <!-- Live Monospace Terminal Log -->
+                        <div id="inspectorLogContainer" style="background: #090d16; border: 1px solid #1e293b; border-radius: 6px; padding: 10px; max-height: 220px; overflow-y: auto; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 11px; line-height: 1.6; color: #e2e8f0;">
+                            <div style="color: #64748b;">[Ready] Waiting for Director job execution...</div>
+                        </div>
+
+                        <!-- Expandable Query & Prompt Inspector Drawers -->
+                        <div style="margin-top: 10px; display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
+                            <!-- Qdrant Queries Box -->
+                            <div style="background: rgba(15, 23, 42, 0.6); border: 1px solid #1e293b; border-radius: 6px; padding: 10px;">
+                                <div style="font-size: 11px; font-weight: 600; color: #38bdf8; margin-bottom: 6px; display: flex; justify-content: space-between;">
+                                    <span>🔍 Qdrant Queries & Embeddings</span>
+                                    <span id="inspectorQueryCountBadge" class="badge" style="background: rgba(56, 189, 248, 0.2); color: #7dd3fc; font-size: 10px;">0 Queries</span>
+                                </div>
+                                <div id="inspectorQueriesList" style="font-size: 11px; color: #cbd5e1; display: flex; flex-direction: column; gap: 4px; max-height: 120px; overflow-y: auto;">
+                                    <span style="color: #64748b;">No queries executed yet.</span>
+                                </div>
+                            </div>
+
+                            <!-- LLM Prompt & Output Inspector Box -->
+                            <div style="background: rgba(15, 23, 42, 0.6); border: 1px solid #1e293b; border-radius: 6px; padding: 10px;">
+                                <div style="font-size: 11px; font-weight: 600; color: #a78bfa; margin-bottom: 6px; display: flex; justify-content: space-between;">
+                                    <span>📝 Last LLM Prompt / Schema</span>
+                                    <span id="inspectorLLMSchemaBadge" class="badge" style="background: rgba(167, 139, 250, 0.2); color: #c4b5fd; font-size: 10px;">None</span>
+                                </div>
+                                <div id="inspectorPromptPreview" style="font-size: 11px; color: #cbd5e1; max-height: 120px; overflow-y: auto; white-space: pre-wrap; font-family: monospace;">
+                                    <span style="color: #64748b;">No LLM calls recorded yet.</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Curated Results & Storyboard Studio -->
+                <div id="directorResultsContainer" style="display: none;">
+                    <!-- Multi-Alternative Tab Switcher -->
+                    <div class="card glass-card" style="margin-bottom: 20px;">
+                        <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px; margin-bottom: 15px;">
+                            <div>
+                                <h2 style="font-size: 18px;">🎞️ Generated Storyboard Timelines</h2>
+                                <span style="font-size: 12px; color: var(--text-muted);">Compare multi-alternative creative cuts generated by the AI Director:</span>
+                            </div>
+
+                            <!-- Action Buttons & Alternative Switcher Pills -->
+                            <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
+                                <button type="button" class="btn btn-primary" id="btnPlayAllStoryboard" style="background: linear-gradient(135deg, #10b981, #059669); border: none; font-weight: bold; box-shadow: 0 4px 12px rgba(16, 185, 129, 0.3);">
+                                    🎬 ▶ Watch Full Cut
+                                </button>
+                                <div class="timeline-switcher" style="display: flex; gap: 6px; flex-wrap: wrap;">
+                                    <button type="button" class="btn btn-secondary active alt-btn" data-alt="alt_c_dual" id="btnAltC">
+                                        🌟 Alt-C: Dual
+                                    </button>
+                                    <button type="button" class="btn btn-secondary alt-btn" data-alt="alt_a_scene" id="btnAltA">
+                                        🎥 Alt-A: Scene
+                                    </button>
+                                    <button type="button" class="btn btn-secondary alt-btn" data-alt="alt_b_frame" id="btnAltB">
+                                        ⚡ Alt-B: Frame
+                                    </button>
+                                    <button type="button" class="btn btn-secondary alt-btn" data-alt="alt_d_heuristic" id="btnAltD" style="border-color: rgba(56, 189, 248, 0.4);">
+                                        📊 Alt-D: Time
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Storyboard Overview Summary Banner -->
+                        <div id="altSummaryBanner" style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; padding: 12px; background: rgba(0, 0, 0, 0.3); border-radius: 8px; font-size: 12px; margin-bottom: 15px;">
+                            <div>Total Duration: <strong id="storyboardDuration" style="color: #10b981;">0.0s</strong> <span style="color: var(--text-muted);">(Target: <span id="storyboardTargetDur">30</span>s)</span></div>
+                            <div>Segments: <strong id="storyboardSegmentsCount" style="color: var(--text-primary);">0</strong> clips</div>
+                            <div>Pacing Score: <strong id="storyboardPacingScore" style="color: #f59e0b;">8.5 / 10</strong></div>
+                            <div>Approval: <strong id="storyboardApprovalBadge" style="color: #10b981;">✅ Approved (Iter 1)</strong></div>
+                        </div>
+
+                        <!-- Storyboard Filmstrip Visual Grid -->
+                        <div class="storyboard-filmstrip" id="storyboardFilmstrip" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px; margin-bottom: 15px;">
+                            <!-- Segment cards injected dynamically -->
+                        </div>
+                    </div>
+
+                    <!-- Deep-Dive Agent Inspector Accordions -->
+                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px;">
+                        <!-- Planner & Narrative Card -->
+                        <div class="card glass-card">
+                            <div class="card-header">
+                                <h3>🧠 1. Director Narrative & Sub-Queries</h3>
+                            </div>
+                            <div style="margin-bottom: 10px;">
+                                <div style="font-size: 11px; color: var(--text-muted); text-transform: uppercase;">Cinematic Narrative Arc:</div>
+                                <p id="directorNarrativeArcText" style="font-size: 13px; color: #e0e7ff; margin-top: 4px; font-style: italic;">
+                                    "A dynamic montage opening with scenic mountains and flowing into joyful family moments."
+                                </p>
+                            </div>
+                            <div>
+                                <div style="font-size: 11px; color: var(--text-muted); text-transform: uppercase; margin-bottom: 6px;">Visual Search Sub-Queries:</div>
+                                <div id="directorSubQueriesList" style="display: flex; flex-direction: column; gap: 6px;">
+                                    <!-- Queries injected dynamically -->
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Editor Critique & Quality Scorecard -->
+                        <div class="card glass-card">
+                            <div class="card-header">
+                                <h3>⚖️ 4. Editor Critique & Quality Loops</h3>
+                            </div>
+                            <div style="margin-bottom: 12px;">
+                                <div style="font-size: 11px; color: var(--text-muted); text-transform: uppercase;">Editor Critique & Pacing Feedback:</div>
+                                <div id="editorFeedbackBox" style="font-size: 12px; color: #fecaca; margin-top: 4px; padding: 8px; background: rgba(239, 68, 68, 0.1); border-radius: 6px; border-left: 3px solid #ef4444;">
+                                    No critiques. Storyboard passed all quality thresholds!
+                                </div>
+                            </div>
+                            <div>
+                                <div style="font-size: 11px; color: var(--text-muted); text-transform: uppercase; margin-bottom: 4px;">Pacing & Duration Adherence:</div>
+                                <div style="display: flex; align-items: center; gap: 10px; font-size: 12px;">
+                                    <div style="flex: 1; height: 8px; background: var(--bg-tertiary); border-radius: 4px; overflow: hidden;">
+                                        <div id="pacingMeterBar" style="width: 85%; height: 100%; background: #10b981;"></div>
+                                    </div>
+                                    <span id="pacingScoreLabel" style="font-weight: 600; color: #10b981;">8.5 / 10</span>
                                 </div>
                             </div>
                         </div>

@@ -53,7 +53,7 @@ class JobEvent:
     def to_sse_string(self) -> str:
         """Format as standard text/event-stream message."""
         payload = json.dumps(self.to_dict())
-        return f"event: {self.event_type}\ndata: {payload}\n\n"
+        return f"data: {payload}\n\n"
 
 
 @dataclass
@@ -284,6 +284,217 @@ class JobManager:
             if 'pipeline' in locals():
                 del pipeline
             gc.collect()
+
+    def start_generation_job(
+        self,
+        workspace_dir: str,
+        prompt: str,
+        corpus_dir: Optional[str] = None,
+        target_duration: int = 30,
+        model_name: str = "qwen2.5:7b",
+        retrieval_mode: str = "dual",
+        generate_alternatives: bool = True,
+    ) -> Job:
+        """Enqueue and launch a background Director Agent video generation job."""
+        job_id = f"job_gen_{uuid.uuid4().hex[:8]}"
+        job = Job(
+            id=job_id,
+            job_type="generation",
+            status=JobStatus.QUEUED,
+            workspace_dir=workspace_dir,
+            corpus_dir=corpus_dir,
+            message="Director Agent job queued...",
+        )
+
+        with self._lock:
+            self._jobs[job_id] = job
+
+        thread = threading.Thread(
+            target=self._run_generation_worker,
+            args=(
+                job_id,
+                workspace_dir,
+                prompt,
+                corpus_dir,
+                target_duration,
+                model_name,
+                retrieval_mode,
+                generate_alternatives,
+            ),
+            daemon=True,
+            name=f"Director-{job_id}",
+        )
+        thread.start()
+        return job
+
+    def _run_generation_worker(
+        self,
+        job_id: str,
+        workspace_dir: str,
+        prompt: str,
+        corpus_dir: Optional[str],
+        target_duration: int,
+        model_name: str,
+        retrieval_mode: str,
+        generate_alternatives: bool,
+    ):
+        """Worker thread executing the LangGraph Director state machine."""
+        with self._lock:
+            job = self._jobs[job_id]
+            job.status = JobStatus.RUNNING
+            job.started_at = time.time()
+            job.stage = "PLANNING"
+            job.message = f"Director planning storyline for '{prompt}'..."
+            job.progress = 15.0
+
+        ev_plan = JobEvent(
+            job_id=job_id,
+            event_type="progress",
+            progress_pct=15.0,
+            stage="PLANNING",
+            message=job.message,
+            data={"prompt": prompt, "model": model_name},
+        )
+        self.broadcast_event(job_id, ev_plan)
+
+        try:
+            from app.core.embedder import MLXEmbedder, PyTorchMPSEmbedder, HAS_MLX
+            from app.core.director import DirectorAgent, get_director_llm, MockDirectorLLM
+
+            workspace_mgr = get_workspace_manager()
+            workspace_mgr.set_workspace(workspace_dir, corpus_path=corpus_dir)
+            manifest = workspace_mgr.get_manifest_db()
+            qdrant = workspace_mgr.get_qdrant_db()
+            collection_name = getattr(workspace_mgr, "collection_name", "media_embeddings")
+
+            # Initialize embedder and LLM (fail-fast without silent mock fallbacks)
+            embedder = MLXEmbedder() if HAS_MLX else PyTorchMPSEmbedder()
+            llm = get_director_llm(model_name=model_name, fallback_to_mock=False)
+
+            agent = DirectorAgent(
+                embedder=embedder,
+                qdrant=qdrant,
+                collection_name=collection_name,
+                llm=llm,
+                manifest=manifest,
+                model_name=model_name,
+            )
+
+            # Stage: RETRIEVAL
+            with self._lock:
+                job.stage = "RETRIEVAL"
+                job.progress = 40.0
+                job.message = "Searching vector database for visual moments..."
+            self.broadcast_event(
+                job_id,
+                JobEvent(job_id=job_id, event_type="progress", progress_pct=40.0, stage="RETRIEVAL", message=job.message),
+            )
+
+            # Stage: DRAFTING & EDITING
+            with self._lock:
+                job.stage = "DRAFTING"
+                job.progress = 70.0
+            def on_step_telemetry(step_data: Dict[str, Any]):
+                stage_name = step_data.get("stage", "DRAFTING")
+                node_name = step_data.get("node", "AGENT")
+                summary = step_data.get("summary", "")
+                with self._lock:
+                    job.stage = stage_name
+                    job.message = f"[{node_name}] {summary}"
+                self.broadcast_event(
+                    job_id,
+                    JobEvent(
+                        job_id=job_id,
+                        event_type="telemetry",
+                        progress_pct=job.progress,
+                        stage=stage_name,
+                        message=job.message,
+                        data=step_data,
+                    ),
+                )
+
+            if generate_alternatives:
+                alternatives = agent.generate_alternatives(
+                    prompt=prompt,
+                    target_duration=target_duration,
+                    job_id_prefix=job_id,
+                    step_callback=on_step_telemetry,
+                )
+                primary_state = alternatives.get("alt_c_dual") or alternatives.get("alt_a_scene") or list(alternatives.values())[0]
+                summary_data = {
+                    "prompt": prompt,
+                    "target_duration": target_duration,
+                    "model": model_name,
+                    "alternatives": {k: v for k, v in alternatives.items()},
+                    "storyboard": primary_state.get("storyboard", []),
+                    "search_queries": primary_state.get("search_queries", []),
+                    "narrative_arc": primary_state.get("narrative_arc", ""),
+                    "approved": primary_state.get("approved", True),
+                    "editor_feedback": primary_state.get("editor_feedback", []),
+                    "agent_telemetry": primary_state.get("agent_telemetry", []),
+                }
+            else:
+                final_state = agent.run(
+                    prompt=prompt,
+                    target_duration=target_duration,
+                    retrieval_mode=retrieval_mode,
+                    job_id=job_id,
+                    step_callback=on_step_telemetry,
+                )
+                summary_data = {
+                    "prompt": prompt,
+                    "target_duration": target_duration,
+                    "model": model_name,
+                    "storyboard": final_state.get("storyboard", []),
+                    "search_queries": final_state.get("search_queries", []),
+                    "narrative_arc": final_state.get("narrative_arc", ""),
+                    "approved": final_state.get("approved", True),
+                    "editor_feedback": final_state.get("editor_feedback", []),
+                    "agent_telemetry": final_state.get("agent_telemetry", []),
+                }
+
+            with self._lock:
+                job.status = JobStatus.COMPLETED
+                job.progress = 100.0
+                job.stage = "COMPLETED"
+                job.completed_at = time.time()
+                tot_dur = sum(s.get("duration", 0) for s in summary_data.get("storyboard", []))
+                job.message = f"Curated {len(summary_data.get('storyboard', []))} moments ({tot_dur:.1f}s) successfully!"
+                job.summary = summary_data
+
+            ev_done = JobEvent(
+                job_id=job_id,
+                event_type="completed",
+                progress_pct=100.0,
+                stage="COMPLETED",
+                message=job.message,
+                data=job.summary,
+            )
+            self.broadcast_event(job_id, ev_done)
+
+        except Exception as e:
+            logger.error("Generation Job %s failed: %s", job_id, e, exc_info=True)
+            with self._lock:
+                job.status = JobStatus.FAILED
+                job.completed_at = time.time()
+                job.error = str(e)
+                job.message = f"Curation failed: {str(e)}"
+
+            ev_err = JobEvent(
+                job_id=job_id,
+                event_type="failed",
+                progress_pct=job.progress,
+                stage="FAILED",
+                message=job.error,
+            )
+            self.broadcast_event(job_id, ev_err)
+
+        finally:
+            if 'llm' in locals() and llm and hasattr(llm, "unload"):
+                try:
+                    llm.unload()
+                except Exception as e:
+                    logger.debug("Notice unloading LLM in generation worker: %s", e)
 
     async def subscribe(self, job_id: str) -> AsyncGenerator[str, None]:
         """

@@ -59,6 +59,13 @@ class Settings(BaseSettings):
     VIDEO_BITRATE: str = "6000k"
     VIDEO_FPS: int = 30
 
+    # Local Ollama Backend
+    OLLAMA_BASE_URL: str = "http://localhost:11434"
+
+    # Cloud LLM API Keys (Optional)
+    GEMINI_API_KEY: str = ""
+    GROQ_API_KEY: str = ""
+
 
 @lru_cache()
 def get_settings() -> Settings:

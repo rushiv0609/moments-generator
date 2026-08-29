@@ -5,6 +5,7 @@ FastAPI Route Handlers for Local AI Moments Generator.
 import os
 import io
 import shutil
+import urllib.parse
 import subprocess
 import datetime
 import tempfile
@@ -38,6 +39,8 @@ from app.api.schemas import (
     IndexJobResponse,
     WorkspaceSearchResponse,
     WorkspaceSearchResultItem,
+    DirectorModelsResponse,
+    DirectorModelItem,
 )
 from app.db.manifest import ManifestDB
 from app.db.qdrant import QdrantVectorDB
@@ -516,7 +519,18 @@ def cancel_job(job_id: str) -> Dict[str, Any]:
 # Media Serving & Visual Semantic Search Explorer (Active Workspace)
 # =========================================================================
 
-@router.get("/media/file")
+def find_live_photo_companion(photo_path: Path) -> Optional[Path]:
+    """Find companion Live Photo MOV/MP4 video for a photo file."""
+    if photo_path.suffix.lower() not in [".heic", ".heif", ".jpg", ".jpeg", ".png"]:
+        return None
+    for ext in [".MOV", ".mov", ".mp4", ".MP4"]:
+        companion = photo_path.with_suffix(ext)
+        if companion.exists() and companion.is_file():
+            return companion
+    return None
+
+
+@router.api_route("/media/file", methods=["GET", "HEAD"])
 def get_media_file(
     path: str = Query(..., description="Absolute path to media file"),
     offset: Optional[float] = Query(default=None, description="Timestamp offset in seconds for video frame preview"),
@@ -525,6 +539,7 @@ def get_media_file(
     """
     Safely stream local photos/videos to the browser.
     Extracts exact frame thumbnails at offset seconds and converts Apple HEIC on-the-fly.
+    Supports HTTP Range requests and HEAD probing for HTML5 video players.
     """
     p = Path(path).resolve()
     if not p.exists() or not p.is_file():
@@ -532,8 +547,8 @@ def get_media_file(
 
     suffix = p.suffix.lower()
 
-    # Exact video frame thumbnail extraction
-    if suffix in [".mp4", ".mov", ".m4v", ".avi", ".mkv"] and (thumbnail or offset is not None):
+    # Exact video frame thumbnail extraction (only when thumbnail=True or offset is explicitly specified for image preview)
+    if suffix in [".mp4", ".mov", ".m4v", ".avi", ".mkv"] and thumbnail:
         try:
             import cv2
             cap = cv2.VideoCapture(str(p))
@@ -544,7 +559,11 @@ def get_media_file(
 
             if ret and frame is not None:
                 _, encoded = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
-                return Response(content=encoded.tobytes(), media_type="image/jpeg")
+                return Response(
+                    content=encoded.tobytes(),
+                    media_type="image/jpeg",
+                    headers={"Cache-Control": "public, max-age=86400"}
+                )
         except Exception as e:
             pass
 
@@ -554,21 +573,142 @@ def get_media_file(
                 img = img.convert("RGB")
                 buf = io.BytesIO()
                 img.save(buf, format="JPEG", quality=85)
-                return Response(content=buf.getvalue(), media_type="image/jpeg")
+                return Response(
+                    content=buf.getvalue(),
+                    media_type="image/jpeg",
+                    headers={"Cache-Control": "public, max-age=86400"}
+                )
         except Exception as e:
             raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to decode HEIC: {e}")
     elif suffix in [".jpg", ".jpeg"]:
-        return FileResponse(str(p), media_type="image/jpeg")
+        return FileResponse(str(p), media_type="image/jpeg", headers={"Accept-Ranges": "bytes"})
     elif suffix in [".png"]:
-        return FileResponse(str(p), media_type="image/png")
+        return FileResponse(str(p), media_type="image/png", headers={"Accept-Ranges": "bytes"})
     elif suffix in [".webp"]:
-        return FileResponse(str(p), media_type="image/webp")
-    elif suffix in [".mp4", ".m4v"]:
-        return FileResponse(str(p), media_type="video/mp4")
-    elif suffix in [".mov"]:
-        return FileResponse(str(p), media_type="video/quicktime")
+        return FileResponse(str(p), media_type="image/webp", headers={"Accept-Ranges": "bytes"})
+    elif suffix in [".mp4", ".m4v", ".mov"]:
+        # video/mp4 with Accept-Ranges allows Safari and Chrome to play Apple MOV/HEVC video smoothly
+        return FileResponse(
+            str(p),
+            media_type="video/mp4",
+            headers={
+                "Accept-Ranges": "bytes",
+                "Cache-Control": "public, max-age=3600",
+            }
+        )
     else:
-        return FileResponse(str(p))
+        return FileResponse(str(p), headers={"Accept-Ranges": "bytes"})
+
+
+@router.api_route("/media/thumbnail", methods=["GET", "HEAD"])
+def get_media_thumbnail(
+    path: str = Query(..., description="Absolute path to media file"),
+    offset: Optional[float] = Query(default=0.0, description="Timestamp offset in seconds for video frame extraction"),
+):
+    """
+    Convenience endpoint for media thumbnail previews.
+    Extracts video frame at offset or serves converted image.
+    """
+    return get_media_file(path=path, offset=offset, thumbnail=True)
+
+
+@router.api_route("/media/clip", methods=["GET", "HEAD"])
+def get_media_clip_preview(
+    path: str = Query(..., description="Absolute path to video file"),
+    start_offset: float = Query(default=0.0, description="Start offset in seconds"),
+    duration: float = Query(default=3.0, description="Clip duration in seconds"),
+    fps: int = Query(default=12, description="Target animation FPS"),
+    max_width: int = Query(default=640, description="Max width for preview frames"),
+):
+    """
+    Extract and stream an animated WebP preview clip spanning [start_offset, start_offset + duration].
+    Provides 100% universal browser-compatible motion playback for any video codec.
+    """
+    p = Path(path).resolve()
+    if not p.exists() or not p.is_file():
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Media file not found on disk.")
+
+    suffix = p.suffix.lower()
+    if suffix not in [".mp4", ".mov", ".m4v", ".avi", ".mkv"]:
+        # If it's an image, check for companion Live Photo MOV
+        companion = find_live_photo_companion(p)
+        if companion:
+            p = companion
+        else:
+            return get_media_file(path=str(p))
+
+    try:
+        import cv2
+        cap = cv2.VideoCapture(str(p))
+        src_fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
+        cap.set(cv2.CAP_PROP_POS_MSEC, max(0.0, start_offset) * 1000.0)
+
+        total_frames = int(max(1.0, min(10.0, duration)) * fps)
+        step = max(1, int(src_fps / fps))
+
+        frames = []
+        count = 0
+        while len(frames) < total_frames and count < total_frames * step:
+            ret, frame = cap.read()
+            if not ret:
+                break
+            if count % step == 0:
+                h, w = frame.shape[:2]
+                if w > max_width:
+                    new_h = int(h * (max_width / w))
+                    frame = cv2.resize(frame, (max_width, new_h))
+                rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                frames.append(Image.fromarray(rgb))
+            count += 1
+        cap.release()
+
+        if not frames:
+            return get_media_thumbnail(path=str(p), offset=start_offset)
+
+        buf = io.BytesIO()
+        frame_duration = int(1000 / max(1, fps))
+        frames[0].save(
+            buf,
+            format="WEBP",
+            save_all=True,
+            append_images=frames[1:],
+            duration=frame_duration,
+            loop=0,
+            quality=75,
+        )
+        return Response(
+            content=buf.getvalue(),
+            media_type="image/webp",
+            headers={"Cache-Control": "public, max-age=3600"}
+        )
+    except Exception as e:
+        logger.warning("Animated clip generation error: %s", e)
+        return get_media_thumbnail(path=str(p), offset=start_offset)
+
+
+@router.get("/media/info")
+def get_media_info(path: str = Query(..., description="Absolute path to media file")) -> Dict[str, Any]:
+    """
+    Get detailed media information, codec support, and Live Photo companion detection.
+    """
+    p = Path(path).resolve()
+    if not p.exists() or not p.is_file():
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Media file not found on disk.")
+
+    suffix = p.suffix.lower()
+    is_video = suffix in [".mp4", ".mov", ".m4v", ".avi", ".mkv"]
+    companion = find_live_photo_companion(p) if not is_video else None
+
+    return {
+        "file_path": str(p),
+        "file_name": p.name,
+        "is_video": is_video,
+        "has_live_photo": bool(companion),
+        "live_photo_path": str(companion) if companion else None,
+        "live_photo_url": f"/api/v1/media/file?path={companion}" if companion else None,
+        "media_url": f"/api/v1/media/file?path={p}",
+        "thumbnail_url": f"/api/v1/media/thumbnail?path={p}",
+    }
 
 
 @router.get("/workspace/search", response_model=WorkspaceSearchResponse)
@@ -778,24 +918,298 @@ def find_similar_media(
 
 
 # =========================================================================
-# Milestone 9 & 10: Curation & Video Rendering Stubs
+# Milestone 9: Director Agent Generation & Model Discovery
 # =========================================================================
 
-@router.post("/jobs/generate", response_model=JobResponse, status_code=status.HTTP_501_NOT_IMPLEMENTED)
+@router.get("/director/models", response_model=DirectorModelsResponse)
+def get_director_models():
+    """
+    List supported and installed local and cloud LLM models for the LangGraph Director Agent.
+    Checks Ollama connectivity and Cloud API key configurations dynamically.
+    """
+    import os
+    import urllib.request
+    import json
+    from app.core.ollama_service import ensure_ollama_running
+    from app.config import get_settings
+
+    settings = get_settings()
+    gemini_key = settings.GEMINI_API_KEY or os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY") or ""
+    groq_key = settings.GROQ_API_KEY or os.environ.get("GROQ_API_KEY") or ""
+
+    installed_names = []
+    ollama_connected = ensure_ollama_running()
+    if ollama_connected:
+        try:
+            req = urllib.request.Request("http://localhost:11434/api/tags", headers={"User-Agent": "MomentsApp/1.0"})
+            with urllib.request.urlopen(req, timeout=1.5) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+                installed_names = [m.get("name") for m in data.get("models", [])]
+        except Exception:
+            pass
+
+    # Match exact installed tags or fallback to base name
+    qwen_tag = next((n for n in installed_names if "qwen3.5" in n or "qwen3" in n), "qwen3.5:9b")
+    gemma_e4b_tag = next((n for n in installed_names if "gemma4" in n and "e4b" in n), "gemma4:e4b")
+    gemma_e2b_tag = next((n for n in installed_names if "gemma4" in n and "e2b" in n), "gemma4:e2b")
+
+    models_list = [
+        # Google Gemini Cloud Models
+        DirectorModelItem(
+            name="gemini-3.7-flash",
+            display_name="✨ Gemini 3.7 Flash (Hybrid Reasoning & Speed)",
+            size_vram="Cloud API",
+            provider="gemini",
+            recommended=True,
+            installed=bool(gemini_key),
+            description="Google's flagship hybrid reasoning model for creative visual storytelling and narrative arcs.",
+        ),
+        DirectorModelItem(
+            name="gemini-3.6-flash",
+            display_name="✨ Gemini 3.6 Flash (Ultra Fast & Stable)",
+            size_vram="Cloud API",
+            provider="gemini",
+            recommended=True,
+            installed=bool(gemini_key),
+            description="Instant sub-2s response time with full structured planning output.",
+        ),
+        DirectorModelItem(
+            name="gemini-2.0-flash",
+            display_name="✨ Gemini 2.0 Flash (Fast Cloud)",
+            size_vram="Cloud API",
+            provider="gemini",
+            recommended=False,
+            installed=bool(gemini_key),
+            description="Deep multimodal context, 1M token window, and sub-1.5s cinematic curation.",
+        ),
+        DirectorModelItem(
+            name="gemini-1.5-flash",
+            display_name="✨ Gemini 1.5 Flash (Cloud)",
+            size_vram="Cloud API",
+            provider="gemini",
+            recommended=False,
+            installed=bool(gemini_key),
+            description="Fast lightweight cloud model with generous free tier (15 req/min).",
+        ),
+        # Groq Cloud Models
+        DirectorModelItem(
+            name="groq:llama-3.3-70b-versatile",
+            display_name="⚡ Groq Llama 3.3 70B (Sub-Second LPU)",
+            size_vram="Cloud LPU",
+            provider="groq",
+            recommended=True,
+            installed=bool(groq_key),
+            description="Ultra-fast LPU hardware (~350+ tokens/sec) for instantaneous multi-cut generation.",
+        ),
+        DirectorModelItem(
+            name="groq:llama-3.1-8b-instant",
+            display_name="⚡ Groq Llama 3.1 8B (Instant)",
+            size_vram="Cloud LPU",
+            provider="groq",
+            recommended=False,
+            installed=bool(groq_key),
+            description="Lightweight Groq model with lightning sub-300ms latency.",
+        ),
+        # Local Ollama Models
+        DirectorModelItem(
+            name=gemma_e4b_tag,
+            display_name=f"🏠 Gemma 4 E4B {'(MLX)' if 'mlx' in gemma_e4b_tag else ''} (Fast Local)",
+            size_vram="~4.8 GB",
+            provider="ollama",
+            recommended=True,
+            installed=any("gemma4" in n and "e4b" in n for n in installed_names),
+            description="Optimal on-device balance of speed (~7-15s) and cinematic structuring.",
+        ),
+        DirectorModelItem(
+            name=qwen_tag,
+            display_name=f"🏠 Qwen 3.5 9B VL {'(MLX)' if 'mlx' in qwen_tag else ''} (Deep Thinking)",
+            size_vram="~6.0 GB",
+            provider="ollama",
+            recommended=False,
+            installed=any("qwen3.5" in n or "qwen3" in n for n in installed_names),
+            description="Deep internal chain-of-thought reasoning for complex multi-shot narratives.",
+        ),
+        DirectorModelItem(
+            name=gemma_e2b_tag,
+            display_name="🏠 Gemma 4 E2B (Ultra Lightweight)",
+            size_vram="~2.4 GB",
+            provider="ollama",
+            recommended=False,
+            installed=any("gemma4" in n and "e2b" in n for n in installed_names),
+            description="Ultra fast on-device storyboard curation with near-zero memory pressure.",
+        ),
+        DirectorModelItem(
+            name="mock",
+            display_name="🧪 Mock Director (Instant Simulation)",
+            size_vram="0 MB",
+            provider="mock",
+            recommended=False,
+            installed=True,
+            description="Runs instant deterministic state transitions without requiring local LLM weights or cloud keys.",
+        ),
+    ]
+
+    # Select smart default model:
+    # 1) If Gemini configured -> gemini-3.7-flash
+    # 2) If Groq configured -> groq:llama-3.3-70b-versatile
+    # 3) If Gemma E4B installed -> gemma_e4b_tag
+    # 4) If Qwen installed -> qwen_tag
+    # 5) Fallback -> first installed or mock
+    default_model = "mock"
+    if bool(gemini_key):
+        default_model = "gemini-3.7-flash"
+    elif bool(groq_key):
+        default_model = "groq:llama-3.3-70b-versatile"
+    elif any("gemma4" in n and "e4b" in n for n in installed_names):
+        default_model = gemma_e4b_tag
+    elif any("qwen3.5" in n or "qwen3" in n for n in installed_names):
+        default_model = qwen_tag
+    elif installed_names:
+        default_model = installed_names[0]
+
+    return DirectorModelsResponse(
+        ollama_connected=ollama_connected,
+        gemini_configured=bool(gemini_key),
+        groq_configured=bool(groq_key),
+        default_model=default_model,
+        models=models_list,
+    )
+
+
+@router.post("/director/unload")
+def unload_director_model(model_name: Optional[str] = Query(default=None, description="Optional specific model name to unload")) -> Dict[str, Any]:
+    """
+    Immediately stop/unload running Ollama local LLM models from GPU/VRAM to free system resources.
+    The Ollama server daemon remains active and ready.
+    """
+    settings = get_settings()
+    base_url = getattr(settings, "OLLAMA_BASE_URL", "http://localhost:11434") or "http://localhost:11434"
+    unloaded_models = []
+
+    try:
+        import httpx
+        # If no specific model requested, query ps to find all currently loaded models and unload them
+        if not model_name:
+            ps_resp = httpx.get(f"{base_url}/api/ps", timeout=3.0)
+            if ps_resp.status_code == 200:
+                loaded = ps_resp.json().get("models", [])
+                for m in loaded:
+                    m_name = m.get("name") or m.get("model")
+                    if m_name:
+                        httpx.post(f"{base_url}/api/generate", json={"model": m_name, "keep_alive": 0}, timeout=5.0)
+                        unloaded_models.append(m_name)
+        else:
+            httpx.post(f"{base_url}/api/generate", json={"model": model_name, "keep_alive": 0}, timeout=5.0)
+            unloaded_models.append(model_name)
+
+        return {
+            "status": "UNLOADED",
+            "message": f"Successfully unloaded {len(unloaded_models)} local model(s) from GPU/VRAM.",
+            "unloaded_models": unloaded_models,
+        }
+    except Exception as e:
+        logger.debug("Notice while unloading models: %s", e)
+        return {
+            "status": "OK",
+            "message": f"Unload request processed: {str(e)}",
+            "unloaded_models": unloaded_models,
+        }
+
+
+@router.post("/jobs/generate", response_model=JobResponse)
 def generate_moments_job(request: GenerateRequest):
     """
-    Generate moments video job stub. Implementation scheduled for Milestone 9.
+    Launch a LangGraph Director Agent video timeline curation job in the background.
     """
-    raise HTTPException(
-        status_code=status.HTTP_501_NOT_IMPLEMENTED,
-        detail="Video timeline curation will be activated in Milestone 9.",
+    workspace_mgr = get_workspace_manager()
+
+    # Determine target workspace and corpus directories
+    if request.workspace_path:
+        workspace_dir = request.workspace_path
+        corpus_dir = request.corpus_path
+    elif workspace_mgr.is_active and workspace_mgr.workspace_path:
+        workspace_dir = str(workspace_mgr.workspace_path)
+        corpus_dir = request.corpus_path or (str(workspace_mgr.corpus_path) if workspace_mgr.corpus_path else None)
+    else:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="No active workspace. Provide 'workspace_path' or initialize a workspace first.",
+        )
+
+    # Launch background generation job
+    job_mgr = get_job_manager()
+    job = job_mgr.start_generation_job(
+        workspace_dir=workspace_dir,
+        prompt=request.prompt,
+        corpus_dir=corpus_dir,
+        target_duration=request.target_duration_seconds,
+        model_name=request.model_name,
+        retrieval_mode=request.retrieval_mode,
+        generate_alternatives=request.generate_alternatives,
     )
+
+    return JobResponse(
+        job_id=job.id,
+        status=job.status.value,
+        corpus_path=corpus_dir,
+        prompt=request.prompt,
+        created_at=job.created_at,
+        message=job.message,
+        workspace_dir=workspace_dir,
+    )
+
+
+@router.get("/workspaces/current/timelines")
+def get_current_workspace_timelines():
+    """
+    Retrieve all curated timeline segments saved in the active workspace SQLite manifest.
+    """
+    workspace_mgr = get_workspace_manager()
+    manifest = workspace_mgr.get_manifest_db()
+
+    conn = manifest._get_connection()
+    try:
+        # Group by job_id
+        cursor = conn.execute("""
+            SELECT t.job_id, t.position, t.segment_type, t.duration, t.start_offset, t.similarity_score,
+                   f.file_path, f.file_type, f.creation_timestamp, f.duration_seconds as total_duration
+            FROM timeline_segments t
+            JOIN files f ON t.file_id = f.id
+            ORDER BY t.job_id, t.position ASC
+        """)
+        rows = cursor.fetchall()
+        jobs_map: Dict[str, List[Dict[str, Any]]] = {}
+        for r in rows:
+            jid = r["job_id"]
+            if jid not in jobs_map:
+                jobs_map[jid] = []
+            jobs_map[jid].append({
+                "position": r["position"],
+                "file_path": r["file_path"],
+                "file_name": Path(r["file_path"]).name,
+                "file_type": r["file_type"],
+                "segment_type": r["segment_type"],
+                "duration": r["duration"],
+                "start_offset": r["start_offset"],
+                "similarity_score": r["similarity_score"],
+                "total_duration": r["total_duration"],
+                "thumbnail_url": f"/api/v1/media/thumbnail?path={urllib.parse.quote(r['file_path'])}",
+                "media_url": f"/api/v1/media/file?path={urllib.parse.quote(r['file_path'])}",
+            })
+
+        return {
+            "workspace_dir": str(workspace_mgr.workspace_path) if workspace_mgr.is_active else None,
+            "total_timeline_jobs": len(jobs_map),
+            "timelines": jobs_map,
+        }
+    finally:
+        conn.close()
 
 
 @router.get("/jobs/{job_id}/download", status_code=status.HTTP_501_NOT_IMPLEMENTED)
 def download_rendered_video(job_id: str):
     """
-    Rendered video download stub. Implementation scheduled for Milestone 10.
+    Rendered video download stub. Implementation scheduled for Milestone 10 (Video Rendering).
     """
     raise HTTPException(
         status_code=status.HTTP_501_NOT_IMPLEMENTED,
