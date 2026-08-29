@@ -41,6 +41,8 @@ from app.api.schemas import (
     WorkspaceSearchResultItem,
     DirectorModelsResponse,
     DirectorModelItem,
+    RenderVideoRequest,
+    RenderVideoResponse,
 )
 from app.db.manifest import ManifestDB
 from app.db.qdrant import QdrantVectorDB
@@ -955,41 +957,42 @@ def get_director_models():
 
     models_list = [
         # Google Gemini Cloud Models
+        # Google Cloud Gemini Models
         DirectorModelItem(
-            name="gemini-3.7-flash",
-            display_name="✨ Gemini 3.7 Flash (Hybrid Reasoning & Speed)",
+            name="gemini-3.5-flash",
+            display_name="✨ Gemini 3.5 Flash (Ultra Fast & Recommended)",
             size_vram="Cloud API",
             provider="gemini",
             recommended=True,
             installed=bool(gemini_key),
-            description="Google's flagship hybrid reasoning model for creative visual storytelling and narrative arcs.",
+            description="Ultra fast (~1.5s) multimodal intelligence for creative visual storytelling and search queries.",
+        ),
+        DirectorModelItem(
+            name="gemini-3.7-flash",
+            display_name="✨ Gemini 3.7 Flash (Hybrid Reasoning)",
+            size_vram="Cloud API",
+            provider="gemini",
+            recommended=False,
+            installed=bool(gemini_key),
+            description="Google's flagship hybrid reasoning model for complex visual storytelling.",
         ),
         DirectorModelItem(
             name="gemini-3.6-flash",
-            display_name="✨ Gemini 3.6 Flash (Ultra Fast & Stable)",
-            size_vram="Cloud API",
-            provider="gemini",
-            recommended=True,
-            installed=bool(gemini_key),
-            description="Instant sub-2s response time with full structured planning output.",
-        ),
-        DirectorModelItem(
-            name="gemini-2.0-flash",
-            display_name="✨ Gemini 2.0 Flash (Fast Cloud)",
+            display_name="✨ Gemini 3.6 Flash (Fast Cloud)",
             size_vram="Cloud API",
             provider="gemini",
             recommended=False,
             installed=bool(gemini_key),
-            description="Deep multimodal context, 1M token window, and sub-1.5s cinematic curation.",
+            description="Instant response time with full structured planning output.",
         ),
         DirectorModelItem(
-            name="gemini-1.5-flash",
-            display_name="✨ Gemini 1.5 Flash (Cloud)",
+            name="gemini-3.5-flash-lite",
+            display_name="✨ Gemini 3.5 Flash Lite (Lightweight)",
             size_vram="Cloud API",
             provider="gemini",
             recommended=False,
             installed=bool(gemini_key),
-            description="Fast lightweight cloud model with generous free tier (15 req/min).",
+            description="High throughput lightweight cloud model.",
         ),
         # Groq Cloud Models
         DirectorModelItem(
@@ -1050,14 +1053,14 @@ def get_director_models():
     ]
 
     # Select smart default model:
-    # 1) If Gemini configured -> gemini-3.7-flash
+    # 1) If Gemini configured -> gemini-3.5-flash
     # 2) If Groq configured -> groq:llama-3.3-70b-versatile
     # 3) If Gemma E4B installed -> gemma_e4b_tag
     # 4) If Qwen installed -> qwen_tag
     # 5) Fallback -> first installed or mock
     default_model = "mock"
     if bool(gemini_key):
-        default_model = "gemini-3.7-flash"
+        default_model = "gemini-3.5-flash"
     elif bool(groq_key):
         default_model = "groq:llama-3.3-70b-versatile"
     elif any("gemma4" in n and "e4b" in n for n in installed_names):
@@ -1144,6 +1147,7 @@ def generate_moments_job(request: GenerateRequest):
         corpus_dir=corpus_dir,
         target_duration=request.target_duration_seconds,
         model_name=request.model_name,
+        api_key=request.api_key,
         retrieval_mode=request.retrieval_mode,
         generate_alternatives=request.generate_alternatives,
     )
@@ -1206,14 +1210,149 @@ def get_current_workspace_timelines():
         conn.close()
 
 
-@router.get("/jobs/{job_id}/download", status_code=status.HTTP_501_NOT_IMPLEMENTED)
+@router.post("/director/render", response_model=RenderVideoResponse)
+def render_director_video(request: RenderVideoRequest) -> RenderVideoResponse:
+    """
+    Compile and render a storyboard timeline into a final MP4 video montage.
+    Applies Ken Burns motion to photos and cross-dissolve transitions.
+    """
+    if not request.storyboard:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Cannot render an empty storyboard.",
+        )
+
+    settings = get_settings()
+    workspace_mgr = get_workspace_manager()
+
+    # Determine exports directory
+    if workspace_mgr.is_active and workspace_mgr.workspace_path:
+        exports_dir = (workspace_mgr.workspace_path / "exports").resolve()
+    else:
+        exports_dir = Path(settings.EXPORTS_DIR).resolve()
+    exports_dir.mkdir(parents=True, exist_ok=True)
+
+    # Resolution from aspect ratio
+    if request.aspect_ratio == "9:16":
+        width, height = 1080, 1920
+    else:
+        width, height = 1920, 1080
+
+    # Output file name
+    timestamp_str = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    file_prefix = request.job_id or "director_cut"
+    out_filename = request.output_filename or f"{file_prefix}_{timestamp_str}.mp4"
+    out_path = exports_dir / out_filename
+
+    from app.core.compiler import VideoCompiler
+    compiler = VideoCompiler(
+        output_width=width,
+        output_height=height,
+        fps=request.fps,
+        transition_duration=request.transition_duration,
+        use_hardware_accel=True,
+    )
+
+    try:
+        render_meta = compiler.render(
+            storyboard=request.storyboard,
+            output_file=str(out_path),
+        )
+
+        stream_url = f"/api/v1/exports/{out_filename}"
+        download_url = f"/api/v1/exports/{out_filename}?download=true"
+
+        return RenderVideoResponse(
+            status="COMPLETED",
+            file_name=out_filename,
+            file_path=str(out_path),
+            download_url=download_url,
+            stream_url=stream_url,
+            file_size_bytes=render_meta.get("file_size_bytes", 0),
+            duration_seconds=render_meta.get("duration_seconds", 0.0),
+            resolution=render_meta.get("resolution", f"{width}x{height}"),
+            fps=render_meta.get("fps", request.fps),
+            total_segments=render_meta.get("total_segments", len(request.storyboard)),
+        )
+    except Exception as e:
+        logger.error("Director video render failed: %s", e, exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Rendering failed: {str(e)}",
+        )
+
+
+@router.get("/exports/{filename}")
+def get_rendered_export_file(filename: str, download: bool = False):
+    """
+    Stream or download a rendered MP4 video file from the exports directory.
+    Supports HTTP Range requests for instant HTML5 video seeking.
+    """
+    settings = get_settings()
+    workspace_mgr = get_workspace_manager()
+
+    possible_dirs = []
+    if workspace_mgr.is_active and workspace_mgr.workspace_path:
+        possible_dirs.append((workspace_mgr.workspace_path / "exports").resolve())
+    possible_dirs.append(Path(settings.EXPORTS_DIR).resolve())
+    possible_dirs.append(Path("./exports").resolve())
+
+    target_file = None
+    for p_dir in possible_dirs:
+        candidate = (p_dir / filename).resolve()
+        if candidate.exists() and candidate.is_file():
+            target_file = candidate
+            break
+
+    if not target_file:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Rendered export file '{filename}' not found.",
+        )
+
+    media_type = "video/mp4"
+    if download:
+        return FileResponse(
+            str(target_file),
+            media_type=media_type,
+            filename=filename,
+            headers={"Content-Disposition": f"attachment; filename={filename}"},
+        )
+
+    return FileResponse(
+        str(target_file),
+        media_type=media_type,
+        filename=filename,
+    )
+
+
+@router.get("/jobs/{job_id}/download")
 def download_rendered_video(job_id: str):
     """
-    Rendered video download stub. Implementation scheduled for Milestone 10 (Video Rendering).
+    Download rendered video for a completed generation job.
     """
+    settings = get_settings()
+    workspace_mgr = get_workspace_manager()
+
+    possible_dirs = []
+    if workspace_mgr.is_active and workspace_mgr.workspace_path:
+        possible_dirs.append((workspace_mgr.workspace_path / "exports").resolve())
+    possible_dirs.append(Path(settings.EXPORTS_DIR).resolve())
+
+    # Look for any file starting with job_id
+    for p_dir in possible_dirs:
+        if p_dir.exists():
+            for f in p_dir.glob(f"{job_id}*.mp4"):
+                return FileResponse(
+                    str(f),
+                    media_type="video/mp4",
+                    filename=f.name,
+                    headers={"Content-Disposition": f"attachment; filename={f.name}"},
+                )
+
     raise HTTPException(
-        status_code=status.HTTP_501_NOT_IMPLEMENTED,
-        detail="Rendered video download will be activated in Milestone 10.",
+        status_code=status.HTTP_404_NOT_FOUND,
+        detail=f"No rendered video found for job ID '{job_id}'. Please render it first.",
     )
 
 

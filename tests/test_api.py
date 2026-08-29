@@ -77,6 +77,7 @@ def test_director_models_and_generation_endpoints(tmp_path):
     assert "models" in data_models
     assert len(data_models["models"]) >= 1
     model_names = [m["name"] for m in data_models["models"]]
+    assert "gemini-3.5-flash" in model_names
     assert "gemini-3.7-flash" in model_names
 
     # 2. Test generate endpoint with workspace
@@ -95,9 +96,9 @@ def test_director_models_and_generation_endpoints(tmp_path):
     res_events = client.get("/api/v1/jobs/nonexistent-id/events")
     assert res_events.status_code == 404
 
-    # 3. Video download stub is Milestone 10 (returns 501)
+    # 3. Video download endpoint returns 404 for non-existent/unrendered job
     res_dl = client.get("/api/v1/jobs/test-id/download")
-    assert res_dl.status_code == 501
+    assert res_dl.status_code == 404
 
 
 def test_debug_embed_endpoint(tmp_path):

@@ -200,3 +200,25 @@ class WorkspaceSearchResponse(BaseModel):
     results: List[WorkspaceSearchResultItem]
 
 
+class RenderVideoRequest(BaseModel):
+    storyboard: List[Dict[str, Any]] = Field(..., description="Ordered list of timeline segments")
+    job_id: Optional[str] = Field(default=None, description="Optional job ID for naming the export")
+    output_filename: Optional[str] = Field(default=None, description="Custom export file name")
+    aspect_ratio: str = Field(default="16:9", description="'16:9' landscape or '9:16' portrait")
+    fps: int = Field(default=30, description="Frames per second")
+    transition_duration: float = Field(default=0.5, description="Transition crossfade duration in seconds")
+
+
+class RenderVideoResponse(BaseModel):
+    status: str
+    file_name: str
+    file_path: str
+    download_url: str
+    stream_url: str
+    file_size_bytes: int
+    duration_seconds: float
+    resolution: str
+    fps: int
+    total_segments: int
+
+

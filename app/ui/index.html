@@ -501,13 +501,21 @@
                                 </div>
                             </div>
 
-                            <!-- LLM Prompt & Output Inspector Box -->
-                            <div style="background: rgba(15, 23, 42, 0.6); border: 1px solid #1e293b; border-radius: 6px; padding: 10px;">
-                                <div style="font-size: 11px; font-weight: 600; color: #a78bfa; margin-bottom: 6px; display: flex; justify-content: space-between;">
-                                    <span>📝 Last LLM Prompt / Schema</span>
-                                    <span id="inspectorLLMSchemaBadge" class="badge" style="background: rgba(167, 139, 250, 0.2); color: #c4b5fd; font-size: 10px;">None</span>
+                            <!-- LLM Multi-Node Prompt & Output Inspector Box -->
+                            <div style="background: rgba(15, 23, 42, 0.6); border: 1px solid #1e293b; border-radius: 6px; padding: 10px; display: flex; flex-direction: column;">
+                                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; flex-wrap: wrap; gap: 4px;">
+                                    <span style="font-size: 11px; font-weight: 600; color: #a78bfa;">📝 LLM Prompts & Responses</span>
+                                    <div style="display: flex; gap: 4px;">
+                                        <button type="button" class="btn btn-secondary llm-tab-btn active" data-node="PLANNER" id="btnTabPlanner" style="padding: 1px 6px; font-size: 10px;">🧠 Planner</button>
+                                        <button type="button" class="btn btn-secondary llm-tab-btn" data-node="DRAFTING" id="btnTabDrafter" style="padding: 1px 6px; font-size: 10px;">✍️ Drafter</button>
+                                        <button type="button" class="btn btn-secondary llm-tab-btn" data-node="EDITOR" id="btnTabEditor" style="padding: 1px 6px; font-size: 10px;">⚖️ Editor</button>
+                                    </div>
                                 </div>
-                                <div id="inspectorPromptPreview" style="font-size: 11px; color: #cbd5e1; max-height: 120px; overflow-y: auto; white-space: pre-wrap; font-family: monospace;">
+                                <div style="display: flex; justify-content: space-between; font-size: 10px; color: #94a3b8; margin-bottom: 4px;">
+                                    <span id="inspectorLLMNodeLabel" style="font-weight: 600; color: #c4b5fd;">[PLANNER Node]</span>
+                                    <span id="inspectorLLMSchemaBadge" class="badge" style="background: rgba(167, 139, 250, 0.2); color: #c4b5fd; font-size: 9.5px;">Awaiting calls...</span>
+                                </div>
+                                <div id="inspectorPromptPreview" style="font-size: 10.5px; color: #cbd5e1; max-height: 140px; overflow-y: auto; white-space: pre-wrap; font-family: monospace; background: #050811; padding: 8px; border-radius: 4px; border: 1px solid #1e293b;">
                                     <span style="color: #64748b;">No LLM calls recorded yet.</span>
                                 </div>
                             </div>
@@ -528,7 +536,10 @@
                             <!-- Action Buttons & Alternative Switcher Pills -->
                             <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
                                 <button type="button" class="btn btn-primary" id="btnPlayAllStoryboard" style="background: linear-gradient(135deg, #10b981, #059669); border: none; font-weight: bold; box-shadow: 0 4px 12px rgba(16, 185, 129, 0.3);">
-                                    🎬 ▶ Watch Full Cut
+                                    🎬 ▶ Watch Cut
+                                </button>
+                                <button type="button" class="btn btn-primary" id="btnRenderFinalVideo" style="background: linear-gradient(135deg, #6366f1, #8b5cf6); border: none; font-weight: bold; box-shadow: 0 4px 12px rgba(99, 102, 241, 0.4);">
+                                    ✨ ⚡ Render MP4
                                 </button>
                                 <div class="timeline-switcher" style="display: flex; gap: 6px; flex-wrap: wrap;">
                                     <button type="button" class="btn btn-secondary active alt-btn" data-alt="alt_c_dual" id="btnAltC">
@@ -558,6 +569,38 @@
                         <!-- Storyboard Filmstrip Visual Grid -->
                         <div class="storyboard-filmstrip" id="storyboardFilmstrip" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px; margin-bottom: 15px;">
                             <!-- Segment cards injected dynamically -->
+                        </div>
+
+                        <!-- Render Status & Final Video Showcase Card -->
+                        <div id="finalRenderCard" style="display: none; background: #0b0f19; border: 2px solid #6366f1; border-radius: 12px; padding: 16px; margin-top: 15px; box-shadow: 0 10px 30px rgba(99, 102, 241, 0.2);">
+                            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; flex-wrap: wrap; gap: 10px;">
+                                <div>
+                                    <h3 style="margin: 0; font-size: 15px; color: #fff; display: flex; align-items: center; gap: 8px;">
+                                        <span>🎉 Final Rendered Montage (.mp4)</span>
+                                        <span class="badge badge-success" id="finalRenderBadge">Render Complete</span>
+                                    </h3>
+                                    <span id="finalRenderMeta" style="font-size: 12px; color: #94a3b8;">1080p H.264 • Hardware Accelerated</span>
+                                </div>
+                                <div style="display: flex; gap: 8px;">
+                                    <a id="btnDownloadRenderedMp4" href="#" download class="btn btn-primary" style="background: linear-gradient(135deg, #10b981, #059669); font-size: 12px; padding: 6px 14px; text-decoration: none; display: inline-flex; align-items: center; gap: 6px;">
+                                        ⬇️ Download Video (.mp4)
+                                    </a>
+                                </div>
+                            </div>
+
+                            <div id="renderProgressBox" style="display: none; margin-bottom: 12px;">
+                                <div style="display: flex; justify-content: space-between; font-size: 12px; color: #c7d2fe; margin-bottom: 4px;">
+                                    <span id="renderProgressText">Compiling photos & videos...</span>
+                                    <span id="renderProgressPct">0%</span>
+                                </div>
+                                <div style="height: 8px; background: rgba(255,255,255,0.1); border-radius: 4px; overflow: hidden;">
+                                    <div id="renderProgressBarFill" style="height: 100%; width: 0%; background: linear-gradient(90deg, #6366f1, #10b981); transition: width 0.2s ease;"></div>
+                                </div>
+                            </div>
+
+                            <div style="display: flex; justify-content: center; background: #000; border-radius: 8px; overflow: hidden; max-height: 480px;">
+                                <video id="finalRenderVideoPlayer" controls playsinline preload="auto" style="width: 100%; max-height: 480px; object-fit: contain;"></video>
+                            </div>
                         </div>
                     </div>
 
@@ -1012,7 +1055,7 @@
         </footer>
     </div>
 
-    <script src="app.js?v=3"></script>
+    <script src="app.js?v=6"></script>
 </body>
 
 </html>

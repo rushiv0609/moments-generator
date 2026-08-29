@@ -237,11 +237,15 @@ async function startIndexingJob() {
         }
 
         // Open SSE connection
+        let isIndexingFinished = false;
         _activeEventSource = new EventSource(`/api/v1/jobs/${jobId}/events`);
 
         _activeEventSource.onmessage = (event) => {
             try {
                 const payload = JSON.parse(event.data);
+                if (payload.stage === "COMPLETED" || payload.event_type === "completed") {
+                    isIndexingFinished = true;
+                }
                 updatePipelineUI(payload);
             } catch (e) {
                 console.debug("SSE Parse notice:", e);
@@ -254,6 +258,7 @@ async function startIndexingJob() {
         });
 
         _activeEventSource.addEventListener("completed", (event) => {
+            isIndexingFinished = true;
             const payload = JSON.parse(event.data);
             updatePipelineUI(payload);
             if (_activeEventSource) {
@@ -267,14 +272,38 @@ async function startIndexingJob() {
             fetchDataDir();
         });
 
-        _activeEventSource.addEventListener("error", (event) => {
+        _activeEventSource.addEventListener("error", async (event) => {
             if (_activeEventSource) {
                 _activeEventSource.close();
                 _activeEventSource = null;
             }
             if (btnIndexWs) btnIndexWs.disabled = false;
             if (btnSubmitIdx) btnSubmitIdx.disabled = false;
-            if (stageBadge) {
+
+            if (isIndexingFinished) return;
+
+            // Double check actual server status before marking failed
+            try {
+                const jobResp = await fetch(`/api/v1/jobs/${jobId}`);
+                if (jobResp.ok) {
+                    const jobData = await jobResp.json();
+                    if (jobData.status === "COMPLETED") {
+                        isIndexingFinished = true;
+                        updatePipelineUI({
+                            stage: "COMPLETED",
+                            progress_pct: 100.0,
+                            message: jobData.message || "Indexing completed successfully.",
+                            data: jobData.summary || {},
+                        });
+                        fetchWorkspace(false);
+                        fetchHealth(true);
+                        fetchDataDir();
+                        return;
+                    }
+                }
+            } catch (e) {}
+
+            if (stageBadge && !isIndexingFinished) {
                 stageBadge.className = "badge badge-danger";
                 stageBadge.textContent = "FAILED";
             }
@@ -1417,7 +1446,7 @@ function initMediaExplorer() {
                     openVideoPlayerModal({
                         file_path: filePath,
                         file_name: fileName,
-                        media_url: `/api/v1/media/file?path=${filePath}`,
+                        media_url: `/api/v1/media/file?path=${encodeURIComponent(filePath)}`,
                         source_offset: offset,
                         score: 1.0,
                     });
@@ -1432,7 +1461,7 @@ function initMediaExplorer() {
                     openVideoPlayerModal({
                         file_path: filePath,
                         file_name: fileName,
-                        media_url: `/api/v1/media/file?path=${filePath}`,
+                        media_url: `/api/v1/media/file?path=${encodeURIComponent(filePath)}`,
                         source_offset: offset,
                         score: 1.0,
                     });
@@ -1582,6 +1611,21 @@ function initDirectorStudio() {
             openFullStoryboardPlayer();
         });
     }
+
+    const btnRender = document.getElementById("btnRenderFinalVideo");
+    if (btnRender) {
+        btnRender.addEventListener("click", () => {
+            renderActiveStoryboardVideo();
+        });
+    }
+
+    // LLM Tab switcher
+    document.querySelectorAll(".llm-tab-btn").forEach(btn => {
+        btn.addEventListener("click", () => {
+            const node = btn.getAttribute("data-node");
+            renderLlmPromptTab(node);
+        });
+    });
 
     initCloudApiKeysUi();
 }
@@ -1814,16 +1858,58 @@ async function runDirectorAgent() {
 
 let totalLLMLatency = 0.0;
 let totalVectorLatency = 0.0;
+let activeLlmInspectorTab = "PLANNER";
+const recordedNodeTelemetry = {
+    "PLANNER": null,
+    "DRAFTING": null,
+    "EDITOR": null,
+};
+
+function renderLlmPromptTab(node) {
+    activeLlmInspectorTab = node;
+    document.querySelectorAll(".llm-tab-btn").forEach(btn => {
+        if (btn.getAttribute("data-node") === node) {
+            btn.classList.add("active");
+            btn.style.background = "rgba(167, 139, 250, 0.35)";
+            btn.style.borderColor = "#a78bfa";
+        } else {
+            btn.classList.remove("active");
+            btn.style.background = "";
+            btn.style.borderColor = "";
+        }
+    });
+
+    const pPrev = document.getElementById("inspectorPromptPreview");
+    const sBadge = document.getElementById("inspectorLLMSchemaBadge");
+    const nLabel = document.getElementById("inspectorLLMNodeLabel");
+
+    if (nLabel) nLabel.textContent = `[${node} Node]`;
+
+    const item = recordedNodeTelemetry[node];
+    if (!item || !item.full_prompt) {
+        if (sBadge) sBadge.textContent = "No calls recorded";
+        if (pPrev) pPrev.innerHTML = `<span style="color: #64748b;">No ${node} LLM prompt/response recorded for this run.</span>`;
+        return;
+    }
+
+    if (sBadge) sBadge.textContent = `${item.schema || 'JSON'} (${(item.latency_seconds || 0).toFixed(2)}s)`;
+    if (pPrev) {
+        pPrev.textContent = `=== [${node}] SYSTEM PROMPT ===\n${item.system_prompt || 'Default instructions'}\n\n=== USER INPUT PROMPT ===\n${item.full_prompt}\n\n=== STRUCTURED RESPONSE JSON ===\n${JSON.stringify(item.response_json || {}, null, 2)}`;
+    }
+}
 
 function resetDirectorInspector() {
     totalLLMLatency = 0.0;
     totalVectorLatency = 0.0;
+    recordedNodeTelemetry["PLANNER"] = null;
+    recordedNodeTelemetry["DRAFTING"] = null;
+    recordedNodeTelemetry["EDITOR"] = null;
+
     const logBox = document.getElementById("inspectorLogContainer");
     if (logBox) logBox.innerHTML = "<div style='color: #64748b;'>[Init] Directing video state machine started...</div>";
     const qList = document.getElementById("inspectorQueriesList");
     if (qList) qList.innerHTML = "<span style='color: #64748b;'>Executing visual queries...</span>";
-    const pPrev = document.getElementById("inspectorPromptPreview");
-    if (pPrev) pPrev.innerHTML = "<span style='color: #64748b;'>Awaiting LLM calls...</span>";
+    renderLlmPromptTab("PLANNER");
     const mLLM = document.getElementById("metricLLMLatency");
     if (mLLM) mLLM.textContent = "0.00s";
     const mVec = document.getElementById("metricVectorLatency");
@@ -1894,14 +1980,12 @@ function handleDirectorTelemetryEvent(data) {
 
     // If LLM telemetry provided
     if (data.llm_telemetry && data.llm_telemetry.full_prompt) {
-        const pPrev = document.getElementById("inspectorPromptPreview");
-        const sBadge = document.getElementById("inspectorLLMSchemaBadge");
+        recordedNodeTelemetry[node] = data.llm_telemetry;
         const mModel = document.getElementById("metricLLMModel");
         if (mModel && data.llm_telemetry.model) mModel.textContent = data.llm_telemetry.model;
-        if (sBadge && data.llm_telemetry.schema) sBadge.textContent = `${data.llm_telemetry.schema} (${data.llm_telemetry.latency_seconds}s)`;
-        if (pPrev) {
-            pPrev.textContent = `[System Prompt]\n${data.llm_telemetry.system_prompt || ''}\n\n[User Prompt]\n${data.llm_telemetry.full_prompt}\n\n[Response Schema]\n${JSON.stringify(data.llm_telemetry.response_json, null, 2)}`;
-        }
+
+        // Refresh currently active tab
+        renderLlmPromptTab(activeLlmInspectorTab);
     }
 }
 
@@ -2104,6 +2188,16 @@ function switchAlternativeView(altKey) {
         currentAltState = currentDirectorJobData.alternatives[altKey];
     } else {
         currentAltState = currentDirectorJobData;
+    }
+
+    // Synchronize telemetry items for LLM inspector
+    if (currentAltState && currentAltState.agent_telemetry) {
+        currentAltState.agent_telemetry.forEach(t => {
+            if (t.node && t.llm_telemetry && t.llm_telemetry.full_prompt) {
+                recordedNodeTelemetry[t.node] = t.llm_telemetry;
+            }
+        });
+        renderLlmPromptTab(activeLlmInspectorTab);
     }
 
     const storyboard = currentAltState.storyboard || [];
@@ -2591,6 +2685,159 @@ function openFullStoryboardPlayer() {
 
     // Start playback
     playSegment(0);
+}
+
+// Final Video Rendering Client Handler
+async function renderActiveStoryboardVideo() {
+    console.log("[Director UI] renderActiveStoryboardVideo triggered. activeAlternativeKey:", activeAlternativeKey);
+
+    const btnRender = document.getElementById("btnRenderFinalVideo");
+    const renderCard = document.getElementById("finalRenderCard");
+    const progressBox = document.getElementById("renderProgressBox");
+    const progressBarFill = document.getElementById("renderProgressBarFill");
+    const progressText = document.getElementById("renderProgressText");
+    const progressPct = document.getElementById("renderProgressPct");
+    const videoPlayer = document.getElementById("finalRenderVideoPlayer");
+    const downloadBtn = document.getElementById("btnDownloadRenderedMp4");
+    const renderMeta = document.getElementById("finalRenderMeta");
+    const renderBadge = document.getElementById("finalRenderBadge");
+
+    if (renderCard) {
+        renderCard.style.display = "block";
+        renderCard.scrollIntoView({ behavior: "smooth", block: "center" });
+    }
+    if (progressBox) progressBox.style.display = "block";
+
+    if (!currentDirectorJobData) {
+        if (progressText) progressText.textContent = "⚠️ Please generate a storyboard first using 'Direct Video'.";
+        if (renderBadge) {
+            renderBadge.className = "badge badge-warning";
+            renderBadge.textContent = "No Storyboard";
+        }
+        alert("No active storyboard available to render. Please click '🚀 Direct Video' first!");
+        return;
+    }
+
+    let currentAltState = null;
+    if (currentDirectorJobData.alternatives && currentDirectorJobData.alternatives[activeAlternativeKey]) {
+        currentAltState = currentDirectorJobData.alternatives[activeAlternativeKey];
+    } else {
+        currentAltState = currentDirectorJobData;
+    }
+
+    const storyboard = currentAltState.storyboard || [];
+    if (storyboard.length === 0) {
+        if (progressText) progressText.textContent = "⚠️ Storyboard contains 0 segments. Cannot render.";
+        alert("Storyboard is empty. Nothing to render.");
+        return;
+    }
+
+    if (btnRender) {
+        btnRender.disabled = true;
+        btnRender.textContent = "⏳ Rendering MP4...";
+    }
+    if (renderBadge) {
+        renderBadge.className = "badge badge-warning";
+        renderBadge.textContent = "Compiling & Encoding...";
+    }
+
+    // Simulated progress ticker while FFmpeg encodes
+    let pct = 5;
+    if (progressBarFill) progressBarFill.style.width = "5%";
+    if (progressPct) progressPct.textContent = "5%";
+    if (progressText) progressText.textContent = "Initializing FFmpeg filter graph & hardware encoder...";
+
+    const progressInterval = setInterval(() => {
+        if (pct < 90) {
+            pct += Math.floor(Math.random() * 8) + 4;
+            if (pct > 90) pct = 90;
+            if (progressBarFill) progressBarFill.style.width = `${pct}%`;
+            if (progressPct) progressPct.textContent = `${pct}%`;
+            if (progressText) {
+                if (pct < 35) progressText.textContent = "Applying Ken Burns animations to photo moments...";
+                else if (pct < 70) progressText.textContent = "Normalizing video clips and trimming scene timestamps...";
+                else progressText.textContent = "Compositing cross-dissolve transitions and encoding H.264 stream...";
+            }
+        }
+    }, 450);
+
+    try {
+        const payload = {
+            storyboard: storyboard,
+            job_id: currentDirectorJobData.job_id || "director_cut",
+            aspect_ratio: document.getElementById("directorAspectRatio")?.value || "16:9",
+            fps: 30,
+            transition_duration: 0.5,
+        };
+
+        const resp = await fetch("/api/v1/director/render", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload),
+        });
+
+        clearInterval(progressInterval);
+
+        if (!resp.ok) {
+            const errData = await resp.json().catch(() => ({}));
+            throw new Error(errData.detail || `Server returned status ${resp.status}`);
+        }
+
+        const data = await resp.json();
+        console.log("[Director UI] Video render successful:", data);
+
+        if (progressBarFill) progressBarFill.style.width = "100%";
+        if (progressPct) progressPct.textContent = "100%";
+        if (progressText) progressText.textContent = "Video rendered successfully!";
+        setTimeout(() => {
+            if (progressBox) progressBox.style.display = "none";
+        }, 1200);
+
+        if (renderBadge) {
+            renderBadge.className = "badge badge-success";
+            renderBadge.textContent = "✨ Render Complete";
+        }
+
+        if (renderMeta) {
+            const szMb = (data.file_size_bytes / (1024 * 1024)).toFixed(2);
+            renderMeta.textContent = `${data.resolution} • ${data.duration_seconds}s • ${szMb} MB • ${data.total_segments} moments stitched`;
+        }
+
+        if (videoPlayer) {
+            // Append cache buster to reload stream freshly
+            videoPlayer.src = `${data.stream_url}?t=${Date.now()}`;
+            videoPlayer.load();
+            videoPlayer.play().catch(() => {});
+        }
+
+        if (downloadBtn) {
+            downloadBtn.href = data.download_url;
+            downloadBtn.setAttribute("download", data.file_name);
+        }
+
+    } catch (err) {
+        clearInterval(progressInterval);
+        console.error("Rendering failed:", err);
+        if (progressBarFill) {
+            progressBarFill.style.width = "100%";
+            progressBarFill.style.backgroundColor = "#ef4444";
+        }
+        if (progressPct) progressPct.textContent = "Error";
+        if (progressText) {
+            progressText.style.color = "#f87171";
+            progressText.textContent = `❌ Rendering error: ${err.message}`;
+        }
+        if (renderBadge) {
+            renderBadge.className = "badge badge-danger";
+            renderBadge.textContent = "Render Failed";
+        }
+        alert(`Rendering failed: ${err.message}`);
+    } finally {
+        if (btnRender) {
+            btnRender.disabled = false;
+            btnRender.textContent = "✨ ⚡ Render MP4";
+        }
+    }
 }
 
 

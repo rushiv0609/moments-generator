@@ -76,25 +76,13 @@ def make_planner_node(
             "Output ONLY valid JSON."
         )
 
-        try:
-            output: PlannerOutput = llm.structured_generate(
-                system_prompt=system_prompt,
-                user_prompt=user_msg,
-                response_schema=PlannerOutput,
-            )
-            queries = output.search_queries
-            narrative = output.mood_or_narrative
-        except Exception as e:
-            logger.warning("Planner LLM generation error: %s. Using default queries.", e)
-            queries = [
-                user_prompt,
-                f"{user_prompt} scenery",
-                f"{user_prompt} people",
-                f"{user_prompt} outdoors",
-                "landscape scenery",
-                "people outdoors",
-            ]
-            narrative = "Direct match highlights montage."
+        output: PlannerOutput = llm.structured_generate(
+            system_prompt=system_prompt,
+            user_prompt=user_msg,
+            response_schema=PlannerOutput,
+        )
+        queries = output.search_queries
+        narrative = output.mood_or_narrative
 
         elapsed = round(time.time() - t0, 3)
         telemetry_item = {
@@ -343,22 +331,19 @@ def make_drafting_node(
         user_msg += "\nAvailable Candidates (sorted by relevance score, pick in DATE order):\n" + "\n".join(candidates_preview)
 
         storyboard_list: List[Dict[str, Any]] = []
-        try:
-            output: DraftingOutput = llm.structured_generate(
-                system_prompt=system_prompt,
-                user_prompt=user_msg,
-                response_schema=DraftingOutput,
-            )
-            for seg in output.storyboard:
-                seg_dict = seg.model_dump()
-                # Ensure creation_timestamp is preserved from matched candidate
-                if not seg_dict.get("creation_timestamp"):
-                    matched_cand = next((c for c in candidates if c.get("file_path") == seg_dict.get("file_path")), None)
-                    if matched_cand:
-                        seg_dict["creation_timestamp"] = matched_cand.get("creation_timestamp")
-                storyboard_list.append(seg_dict)
-        except Exception as e:
-            logger.warning("Drafting LLM generation error: %s. Using heuristic assembly.", e)
+        output: DraftingOutput = llm.structured_generate(
+            system_prompt=system_prompt,
+            user_prompt=user_msg,
+            response_schema=DraftingOutput,
+        )
+        for seg in output.storyboard:
+            seg_dict = seg.model_dump()
+            # Ensure creation_timestamp is preserved from matched candidate
+            if not seg_dict.get("creation_timestamp"):
+                matched_cand = next((c for c in candidates if c.get("file_path") == seg_dict.get("file_path")), None)
+                if matched_cand:
+                    seg_dict["creation_timestamp"] = matched_cand.get("creation_timestamp")
+            storyboard_list.append(seg_dict)
 
         # Fallback heuristic: If LLM produced 0 segments, pick candidates until duration is reached
         if not storyboard_list and candidates:
@@ -499,62 +484,59 @@ def make_editor_node(
         # Ask LLM for quality critique if available
         approved = len(feedback_notes) == 0
         pacing_score = 8.0
-        try:
-            system_prompt = (
-                "You are a Senior Video Editor performing quality control on a proposed storyboard.\n"
-                "You MUST check ALL of the following and REJECT if any fail:\n\n"
-                "CHECKLIST:\n"
-                "1. DURATION: Total storyboard duration must be within ±25% of target.\n"
-                "2. DUPLICATES: No file should appear more than once. Reject if duplicates found.\n"
-                "3. CHRONOLOGICAL ORDER: Segments should be ordered by capture date (earliest → latest). "
-                "Reject if a segment from a later date appears before an earlier one.\n"
-                "4. VARIETY: There should be a mix of images and video clips. "
-                "Reject if all segments are the same type.\n"
-                "5. PACING: Durations should vary (not all exactly 3.0s). "
-                "At least some segments should be 2.0-2.5s and some 4.0-5.0s.\n"
-                "6. BACK-TO-BACK: No two consecutive segments should be from the same source video file.\n"
-                f"7. MINIMUM SEGMENTS: For a {target_duration}s video, expect at least "
-                f"{max(3, target_duration // 6)} segments.\n\n"
-                "If ALL checks pass, approve. Otherwise, list which checks failed and give specific fix instructions.\n"
-                "Output ONLY valid JSON."
-            )
+        system_prompt = (
+            "You are a Senior Video Editor performing quality control on a proposed storyboard.\n"
+            "You MUST check ALL of the following and REJECT if any fail:\n\n"
+            "CHECKLIST:\n"
+            "1. DURATION: Total storyboard duration must be within ±25% of target.\n"
+            "2. DUPLICATES: No file should appear more than once. Reject if duplicates found.\n"
+            "3. CHRONOLOGICAL ORDER: Segments should be ordered by capture date (earliest → latest). "
+            "Reject if a segment from a later date appears before an earlier one.\n"
+            "4. VARIETY: There should be a mix of images and video clips. "
+            "Reject if all segments are the same type.\n"
+            "5. PACING: Durations should vary (not all exactly 3.0s). "
+            "At least some segments should be 2.0-2.5s and some 4.0-5.0s.\n"
+            "6. BACK-TO-BACK: No two consecutive segments should be from the same source video file.\n"
+            f"7. MINIMUM SEGMENTS: For a {target_duration}s video, expect at least "
+            f"{max(3, target_duration // 6)} segments.\n\n"
+            "If ALL checks pass, approve. Otherwise, list which checks failed and give specific fix instructions.\n"
+            "Output ONLY valid JSON."
+        )
 
-            segment_details = []
-            for idx, s in enumerate(storyboard):
-                ts = s.get("creation_timestamp")
-                if ts:
-                    try:
-                        dt = datetime.datetime.fromtimestamp(ts)
-                        date_str = dt.strftime("%b %d %H:%M")
-                    except (ValueError, OSError):
-                        date_str = "unknown"
-                else:
+        segment_details = []
+        for idx, s in enumerate(storyboard):
+            ts = s.get("creation_timestamp")
+            if ts:
+                try:
+                    dt = datetime.datetime.fromtimestamp(ts)
+                    date_str = dt.strftime("%b %d %H:%M")
+                except (ValueError, OSError):
                     date_str = "unknown"
+            else:
+                date_str = "unknown"
 
-                fname = s.get("file_path", "").split("/")[-1]
-                segment_details.append(
-                    f"  [{idx}] {fname} | Date: {date_str} | Type: {s.get('segment_type')} | "
-                    f"Duration: {s.get('duration', 3.0):.1f}s | Score: {s.get('similarity_score', 'N/A')}"
-                )
-
-            user_msg = (
-                f"Target Duration: {target_duration}s | Actual Duration: {total_duration:.1f}s\n"
-                f"Segment Count: {len(storyboard)}\n\n"
-                "Proposed Storyboard:\n" + "\n".join(segment_details)
+            fname = s.get("file_path", "").split("/")[-1]
+            segment_details.append(
+                f"  [{idx}] {fname} | Date: {date_str} | Type: {s.get('segment_type')} | "
+                f"Duration: {s.get('duration', 3.0):.1f}s | Score: {s.get('similarity_score', 'N/A')}"
             )
 
-            critique: EditorOutput = llm.structured_generate(
-                system_prompt=system_prompt,
-                user_prompt=user_msg,
-                response_schema=EditorOutput,
-            )
-            pacing_score = critique.pacing_score
-            if not critique.approved:
-                approved = False
-                feedback_notes.append(critique.feedback)
-                feedback_notes.extend(critique.suggested_modifications)
-        except Exception as e:
-            logger.debug("Editor LLM notice: %s", e)
+        user_msg = (
+            f"Target Duration: {target_duration}s | Actual Duration: {total_duration:.1f}s\n"
+            f"Segment Count: {len(storyboard)}\n\n"
+            "Proposed Storyboard:\n" + "\n".join(segment_details)
+        )
+
+        critique: EditorOutput = llm.structured_generate(
+            system_prompt=system_prompt,
+            user_prompt=user_msg,
+            response_schema=EditorOutput,
+        )
+        pacing_score = critique.pacing_score
+        if not critique.approved:
+            approved = False
+            feedback_notes.append(critique.feedback)
+            feedback_notes.extend(critique.suggested_modifications)
 
         elapsed = round(time.time() - t0, 3)
         telemetry_item = {

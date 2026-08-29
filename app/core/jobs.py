@@ -292,6 +292,7 @@ class JobManager:
         corpus_dir: Optional[str] = None,
         target_duration: int = 30,
         model_name: str = "qwen2.5:7b",
+        api_key: Optional[str] = None,
         retrieval_mode: str = "dual",
         generate_alternatives: bool = True,
     ) -> Job:
@@ -318,6 +319,7 @@ class JobManager:
                 corpus_dir,
                 target_duration,
                 model_name,
+                api_key,
                 retrieval_mode,
                 generate_alternatives,
             ),
@@ -335,6 +337,7 @@ class JobManager:
         corpus_dir: Optional[str],
         target_duration: int,
         model_name: str,
+        api_key: Optional[str],
         retrieval_mode: str,
         generate_alternatives: bool,
     ):
@@ -369,7 +372,7 @@ class JobManager:
 
             # Initialize embedder and LLM (fail-fast without silent mock fallbacks)
             embedder = MLXEmbedder() if HAS_MLX else PyTorchMPSEmbedder()
-            llm = get_director_llm(model_name=model_name, fallback_to_mock=False)
+            llm = get_director_llm(model_name=model_name, api_key=api_key, fallback_to_mock=False)
 
             agent = DirectorAgent(
                 embedder=embedder,
@@ -378,6 +381,7 @@ class JobManager:
                 llm=llm,
                 manifest=manifest,
                 model_name=model_name,
+                api_key=api_key,
             )
 
             # Stage: RETRIEVAL
