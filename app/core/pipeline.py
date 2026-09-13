@@ -28,6 +28,7 @@ from app.core.extractor import decode_image, extract_video_frames, FrameData
 from app.core.scene_detector import detect_video_scenes, SceneBoundary
 from app.core.scanner import scan_corpus
 from app.core.telemetry import TelemetryMonitor
+from app.core.aesthetic import get_nima_scorer, compute_technical_quality, NimaScorer
 from app.config import get_settings
 
 logger = logging.getLogger(__name__)
@@ -136,12 +137,14 @@ class IngestionPipeline:
         manifest: ManifestDB,
         qdrant: QdrantVectorDB,
         embedder: Optional[EmbedderInterface] = None,
+        nima_scorer: Optional[NimaScorer] = None,
         max_decode_workers: int = 12,
         batch_size: int = 32,
     ):
         self.manifest = manifest
         self.qdrant = qdrant
         self.embedder = embedder or create_embedder()
+        self.nima_scorer = nima_scorer or get_nima_scorer()
         self.max_decode_workers = max_decode_workers
         self.batch_size = batch_size
         self._cancelled = False
@@ -153,7 +156,7 @@ class IngestionPipeline:
     def _embed_loop(self, decode_queue: queue.Queue, index_queue: queue.Queue):
         """
         Consumer of decode_queue and producer for index_queue.
-        Reads frames, batches them, embeds on GPU, and puts points to index_queue.
+        Reads frames, batches them, embeds on GPU, scores quality, and puts points to index_queue.
         Timeout of 10s ensures partial batches are flushed.
         """
         pending_points_metadata = []
@@ -165,12 +168,33 @@ class IngestionPipeline:
                 return
 
             try:
+                # 1. Vision embeddings (SigLIP2)
                 vectors = self.embedder.embed_images(pending_images_to_embed)
+
+                # 2. Neural aesthetic scores (NIMA)
+                nima_scores = self.nima_scorer.score_batch(pending_images_to_embed)
+                if not nima_scores or len(nima_scores) != len(pending_images_to_embed):
+                    nima_scores = [0.5] * len(pending_images_to_embed)
+
                 points_to_upsert: List[VectorPoint] = []
                 file_to_point_ids: Dict[int, List[str]] = {}
-                scene_vectors_map: Dict[Tuple[int, int], List[Tuple[np.ndarray, Optional[float], Optional[float], FileRecord]]] = {}
+                scene_vectors_map: Dict[Tuple[int, int], List[Tuple[np.ndarray, Optional[float], Optional[float], FileRecord, Dict[str, float]]]] = {}
 
-                for (record, frame), vec in zip(pending_points_metadata, vectors):
+                for idx, ((record, frame), vec) in enumerate(zip(pending_points_metadata, vectors)):
+                    # 3. Technical quality metrics (OpenCV)
+                    tech_metrics = compute_technical_quality(frame.pixels)
+                    nima_val = nima_scores[idx]
+                    epic_comp = 0.55 * nima_val + 0.45 * tech_metrics["technical_composite"]
+
+                    frame_scores = {
+                        "nima_aesthetic": round(float(nima_val), 4),
+                        "sharpness": tech_metrics["sharpness"],
+                        "colorfulness": tech_metrics["colorfulness"],
+                        "contrast": tech_metrics["contrast"],
+                        "technical_composite": tech_metrics["technical_composite"],
+                        "epic_composite": round(float(epic_comp), 4),
+                    }
+
                     pt = VectorPoint(
                         vector=vec,
                         file_path=record.file_path,
@@ -185,6 +209,7 @@ class IngestionPipeline:
                         scene_start=frame.scene_start,
                         scene_end=frame.scene_end,
                         is_scene_representative=False,
+                        scores=frame_scores,
                     )
                     points_to_upsert.append(pt)
                     if record.id not in file_to_point_ids:
@@ -195,7 +220,7 @@ class IngestionPipeline:
                         key = (record.id, frame.scene_id)
                         if key not in scene_vectors_map:
                             scene_vectors_map[key] = []
-                        scene_vectors_map[key].append((vec, frame.scene_start, frame.scene_end, record))
+                        scene_vectors_map[key].append((vec, frame.scene_start, frame.scene_end, record, frame_scores))
 
                 for (file_id, scene_id), items in scene_vectors_map.items():
                     if not items:
@@ -209,6 +234,13 @@ class IngestionPipeline:
                     norm = np.linalg.norm(mean_vec)
                     if norm > 0:
                         mean_vec = mean_vec / norm
+
+                    # Average quality scores across member frames
+                    avg_scores = {}
+                    all_item_scores = [it[4] for it in items if it[4]]
+                    if all_item_scores:
+                        for skey in all_item_scores[0].keys():
+                            avg_scores[skey] = round(float(np.mean([sc.get(skey, 0.5) for sc in all_item_scores])), 4)
 
                     scene_pt = VectorPoint(
                         vector=mean_vec,
@@ -225,6 +257,7 @@ class IngestionPipeline:
                         scene_end=sc_end,
                         scene_frame_count=len(vecs),
                         is_scene_representative=True,
+                        scores=avg_scores,
                     )
                     points_to_upsert.append(scene_pt)
                     if first_rec.id in file_to_point_ids:

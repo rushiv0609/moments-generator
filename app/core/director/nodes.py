@@ -1,12 +1,14 @@
 """
 LangGraph Node implementations for Director Agent state machine.
-Includes Planner, Retrieval v2, Drafting, Editor, and Compiler nodes.
+Includes Planner, Multi-Signal Retrieval, Drafting with Chronological Sort & Auto-fill,
+Editor with Multi-Factor Evaluation & Best-Draft Watermarking, and Compiler nodes.
 """
 
 import logging
 import time
+import datetime
 from typing import Dict, Any, List, Optional, Callable
-from pydantic import BaseModel
+import numpy as np
 
 from app.core.director.state import (
     DirectorState,
@@ -17,6 +19,7 @@ from app.core.director.state import (
     TimelineSegment,
     CandidateItem,
 )
+from app.core.director.profiles import get_creative_profile
 from app.core.director.llm import DirectorLLMInterface
 from app.core.embedder import EmbedderInterface
 from app.db.qdrant import QdrantVectorDB
@@ -37,7 +40,6 @@ def make_planner_node(
     """Factory creating the Planner node."""
 
     def planner_node(state: DirectorState) -> Dict[str, Any]:
-        import time
         t0 = time.time()
         user_prompt = state.get("user_prompt", "")
         target_duration = state.get("target_duration", 30)
@@ -55,24 +57,24 @@ def make_planner_node(
         system_prompt = (
             "You are an AI that breaks down video prompts into simple search queries for a visual database.\n"
             "Rules:\n"
-            "1. Generate 8 to 15 SHORT, CONCRETE search queries (2-4 words each).\n"
-            "2. Use plain visual descriptions like 'mountain landscape', 'group of friends', 'river flowing'.\n"
-            "3. Do NOT use cinematic language like 'wide angle', 'slow motion', 'time lapse', 'drone shot'.\n"
-            "4. Include a mix of: landscapes, people, activities, objects, and atmosphere.\n"
-            "5. Include at least 2 broad fallback queries like 'outdoor scenery' or 'people walking'.\n\n"
+            "1. Generate 8 to 15 ULTRA-SHORT, HIGHLY-RELEVANT search queries.\n"
+            "2. MAXIMUM 2 words per query. Rarely use 3 words only if absolutely necessary for context.\n"
+            "3. Queries MUST be highly specific to the user input to pinpoint the exact visual data.\n"
+            "4. Queries MUST be distinct and mutually exclusive to avoid retrieving duplicate results.\n"
+            "5. Do NOT use cinematic language like 'wide angle', 'slow motion', 'time lapse', 'drone shot'.\n\n"
             "Example - Prompt: 'Mountain trek adventure with friends'\n"
-            "Good queries: ['mountain landscape', 'hiking trail', 'group of friends outdoors', 'backpack gear', "
-            "'river crossing', 'tent camping', 'sunrise sky', 'rocky terrain', 'valley view', 'people walking', "
-            "'forest path', 'snow on mountain']\n\n"
+            "Good queries: ['mountain', 'hiking', 'friends', 'backpack', "
+            "'river crossing', 'tent', 'sunrise', 'rocks', 'valley', 'walking', "
+            "'forest', 'snow']\n\n"
             "Example - Prompt: 'Beach vacation family fun'\n"
-            "Good queries: ['beach sand ocean', 'family playing', 'sunset over water', 'swimming', "
-            "'sandcastle', 'palm trees', 'children laughing', 'boat on water', 'seafood plate', "
-            "'beach umbrella', 'waves crashing', 'group photo outdoors']"
+            "Good queries: ['beach', 'family', 'sunset', 'swimming', "
+            "'sandcastle', 'palm trees', 'children', 'boat', 'seafood', "
+            "'umbrella', 'waves', 'group']"
         )
         user_msg = (
             f"User Prompt: '{user_prompt}'\n"
             f"Target Video Duration: {target_duration} seconds.\n\n"
-            "Generate 8-15 short, concrete visual search queries and establish a narrative mood.\n"
+            "Generate 8-15 ultra-short, highly relevant visual search queries (max 2-3 words) without overlap, and establish a narrative mood.\n"
             "Output ONLY valid JSON."
         )
 
@@ -114,7 +116,7 @@ def make_planner_node(
 
 
 # ---------------------------------------------------------------------------
-# 2. RETRIEVAL NODE (v2: Dual-Granularity Search with Score Thresholding)
+# 2. RETRIEVAL NODE (v3: Multi-Signal Aesthetic Ranking & Visual Diversity)
 # ---------------------------------------------------------------------------
 
 def make_retrieval_node(
@@ -123,13 +125,17 @@ def make_retrieval_node(
     collection_name: str,
     step_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
 ) -> Callable[[DirectorState], Dict[str, Any]]:
-    """Factory creating the Dual-Granularity Retrieval node."""
+    """Factory creating the Multi-Signal Retrieval node."""
 
     def retrieval_node(state: DirectorState) -> Dict[str, Any]:
-        import time
         t0 = time.time()
         queries = state.get("search_queries", [])
         mode = state.get("retrieval_mode", "dual")
+        profile_id = state.get("creative_profile", "journey")
+        profile = state.get("creative_config") or get_creative_profile(profile_id)
+        rank_weights = profile.get("rank_weights", {"cosine": 0.50, "nima": 0.20, "epic_sim": 0.15, "technical": 0.15})
+        epic_ref_vec = state.get("epic_reference_vector")
+
         candidates_map: Dict[str, CandidateItem] = {}
         query_breakdown: List[Dict[str, Any]] = []
 
@@ -159,6 +165,7 @@ def make_retrieval_node(
                                 file_id=r.file_id,
                                 file_type=r.file_type,
                                 score=r.score,
+                                scores=r.scores,
                                 source_offset=r.source_offset,
                                 duration_seconds=r.duration_seconds,
                                 granularity="scene",
@@ -189,6 +196,7 @@ def make_retrieval_node(
                                 file_id=r.file_id,
                                 file_type=r.file_type,
                                 score=r.score,
+                                scores=r.scores,
                                 source_offset=r.source_offset,
                                 duration_seconds=r.duration_seconds,
                                 granularity="frame",
@@ -208,20 +216,86 @@ def make_retrieval_node(
                 "matched_frames": matched_frames,
             })
 
-        # Convert to serialized dicts sorted by relevance score
-        sorted_candidates = sorted(
-            candidates_map.values(), key=lambda x: x.score, reverse=True
-        )
+        # Calculate composite ranking score for every candidate based on active scoring signals / custom weights
+        all_candidates = list(candidates_map.values())
+        custom_weights = state.get("scoring_weights")
+        if custom_weights and isinstance(custom_weights, dict) and any(float(v) > 0 for v in custom_weights.values()):
+            raw_weights: Dict[str, float] = {k: float(v) for k, v in custom_weights.items() if float(v) > 0}
+            active_signals = list(raw_weights.keys())
+        else:
+            active_signals = state.get("scoring_signals")
+            if not active_signals:
+                active_signals = ["cosine", "nima", "technical"]
+            if "cosine" not in active_signals:
+                active_signals = ["cosine"] + list(active_signals)
+
+            # Calculate raw weights from profile rank_weights
+            raw_weights: Dict[str, float] = {}
+            for s in active_signals:
+                if s == "epic_sim":
+                    if epic_ref_vec:
+                        raw_weights["epic_sim"] = rank_weights.get("epic_sim", 0.15)
+                elif s in rank_weights:
+                    raw_weights[s] = rank_weights.get(s, 0.1)
+                elif s == "technical":
+                    raw_weights["technical"] = rank_weights.get("technical", 0.10)
+
+        total_w = sum(raw_weights.values())
+        if total_w > 0:
+            norm_weights = {k: v / total_w for k, v in raw_weights.items()}
+        else:
+            norm_weights = {"cosine": 1.0}
+
+        for c in all_candidates:
+            c_scores = c.scores or {}
+            
+            # Map cosine similarity (SigLIP2 ~0.08 to 0.25) to normalized [0.0, 1.0]
+            cos_norm = float(np.clip((c.score - 0.05) / 0.20, 0.0, 1.0))
+            
+            nima_val = float(c_scores.get("nima_aesthetic", 0.5))
+            sharp_val = float(c_scores.get("sharpness", 0.5))
+            cont_val = float(c_scores.get("contrast", 0.5))
+            color_val = float(c_scores.get("colorfulness", 0.5))
+            tech_val = float(c_scores.get("technical_composite", 0.5))
+            
+            epic_sim_val = 0.0
+            if epic_ref_vec and c.vector:
+                epic_sim_val = float(np.dot(c.vector, epic_ref_vec))
+                epic_sim_val = float(np.clip((epic_sim_val - 0.05) / 0.20, 0.0, 1.0))
+
+            signal_values = {
+                "cosine": cos_norm,
+                "nima": nima_val,
+                "sharpness": sharp_val,
+                "contrast": cont_val,
+                "colorfulness": color_val,
+                "epic_sim": epic_sim_val,
+                "technical": tech_val,
+            }
+
+            comp_rank = sum(norm_weights[s] * signal_values[s] for s in norm_weights if s in signal_values)
+            c.composite_rank = round(comp_rank, 4)
+
+        # Sort by composite rank descending
+        all_candidates.sort(key=lambda x: x.composite_rank or x.score, reverse=True)
 
         # Filter out low-confidence candidates (SigLIP2 scores below 0.08 are noise)
         MIN_SCORE_THRESHOLD = 0.08
-        before_filter = len(sorted_candidates)
-        filtered_candidates = [c for c in sorted_candidates if c.score >= MIN_SCORE_THRESHOLD]
-        # If all candidates filtered out, keep top 10 as fallback
-        if not filtered_candidates and sorted_candidates:
-            filtered_candidates = sorted_candidates[:10]
+        before_filter = len(all_candidates)
+        filtered_candidates = [c for c in all_candidates if c.score >= MIN_SCORE_THRESHOLD]
+        if not filtered_candidates and all_candidates:
+            filtered_candidates = all_candidates[:10]
         filtered_out = before_filter - len(filtered_candidates)
-        sorted_candidates = filtered_candidates
+
+        # Apply per-source-file cap (max 2 clips per source file)
+        max_clips = profile.get("max_clips_per_file", 2)
+        capped_candidates = []
+        file_counts: Dict[str, int] = {}
+        for c in filtered_candidates:
+            cnt = file_counts.get(c.file_path, 0)
+            if cnt < max_clips:
+                capped_candidates.append(c)
+                file_counts[c.file_path] = cnt + 1
 
         elapsed = round(time.time() - t0, 3)
 
@@ -230,20 +304,25 @@ def make_retrieval_node(
             "stage": "RETRIEVAL",
             "latency_seconds": elapsed,
             "mode": mode,
-            "total_candidates": len(sorted_candidates),
+            "profile": profile.get("name", profile_id),
+            "scoring_signals": active_signals,
+            "scoring_weights": {k: round(v, 4) for k, v in norm_weights.items()},
+            "total_candidates": len(capped_candidates),
             "filtered_out_low_score": filtered_out,
             "min_score_threshold": MIN_SCORE_THRESHOLD,
             "query_breakdown": query_breakdown,
             "top_candidates_preview": [
                 {
                     "file": c.file_path.split("/")[-1],
-                    "score": round(c.score, 3),
+                    "cosine_score": round(c.score, 3),
+                    "composite_rank": c.composite_rank,
+                    "nima": (c.scores or {}).get("nima_aesthetic"),
                     "granularity": c.granularity,
                     "matched_query": c.matched_query,
                 }
-                for c in sorted_candidates[:6]
+                for c in capped_candidates[:6]
             ],
-            "summary": f"Retrieved {len(sorted_candidates)} candidates across {len(queries)} queries in {elapsed:.2f}s (filtered {filtered_out} noise items < {MIN_SCORE_THRESHOLD})",
+            "summary": f"Retrieved {len(capped_candidates)} candidates across {len(queries)} queries with {profile.get('name', profile_id)} scoring in {elapsed:.2f}s",
         }
 
         if step_callback:
@@ -256,7 +335,7 @@ def make_retrieval_node(
         current_telemetry.append(telemetry_item)
 
         return {
-            "retrieved_candidates": [c.model_dump() for c in sorted_candidates],
+            "retrieved_candidates": [c.model_dump() for c in capped_candidates],
             "agent_telemetry": current_telemetry,
         }
 
@@ -264,7 +343,7 @@ def make_retrieval_node(
 
 
 # ---------------------------------------------------------------------------
-# 3. DRAFTING NODE
+# 3. DRAFTING NODE (v3: Strict Chronological Order & Intelligent Auto-Fill)
 # ---------------------------------------------------------------------------
 
 def make_drafting_node(
@@ -274,32 +353,36 @@ def make_drafting_node(
     """Factory creating the Drafting node."""
 
     def drafting_node(state: DirectorState) -> Dict[str, Any]:
-        import time
-        import datetime
         t0 = time.time()
         user_prompt = state.get("user_prompt", "")
         target_duration = state.get("target_duration", 30)
         candidates = state.get("retrieved_candidates", [])
         editor_feedback = state.get("editor_feedback", [])
         narrative = state.get("narrative_arc", "")
+        profile_id = state.get("creative_profile", "journey")
+        profile = state.get("creative_config") or get_creative_profile(profile_id)
+
+        # Pre-compute segment guidance
+        min_factor = profile.get("min_segments_factor", 1.0)
+        min_segments = max(4, int((target_duration // 4) * min_factor))
+        max_segments = max(min_segments + 4, int((target_duration // 2) * min_factor))
+        emphasis = profile.get("drafter_emphasis", "")
 
         system_prompt = (
-            "You are a Film Editor assembling a video storyboard from candidate media.\n"
+            "You are an Expert Film Editor assembling a video storyboard from curated candidate media.\n"
             "Rules:\n"
-            f"1. Target total duration: approximately {target_duration} seconds.\n"
-            "2. For images: assign duration 2.0 to 4.0 seconds.\n"
-            "3. For video clips: select start_offset and end_offset spanning 2.0 to 6.0 seconds.\n"
-            "4. CRITICAL: Arrange segments in CHRONOLOGICAL order by their capture date (earliest first).\n"
-            "5. Do NOT pick duplicate files — each file_path should appear at most once.\n"
-            "6. Prefer candidates with higher scores (closer to 0.15 is better).\n"
-            "7. Skip candidates with scores below 0.09 unless no better option exists.\n"
-            "8. Mix images and video clips for visual variety.\n"
-            "9. You MUST use the exact file_path values from the candidate list below.\n"
-            "10. Output ONLY valid JSON matching the schema."
+            f"1. TARGET DURATION: Total storyboard MUST be between {target_duration} and {int(target_duration * 1.25)} seconds.\n"
+            f"2. SEGMENT COUNT: You MUST select between {min_segments} and {max_segments} segments.\n"
+            "3. For images: assign duration 1.5 to 2.5 seconds (MAX 2.5s per photo).\n"
+            "4. For video clips: select start_offset and end_offset spanning 2.5 to 7.0 seconds.\n"
+            "5. NO DUPLICATE FILES — each file_path should appear at most once.\n"
+            "6. Prefer candidates with higher composite rank.\n"
+            f"7. {emphasis}\n"
+            "8. Output ONLY valid JSON matching the schema."
         )
 
         candidates_preview = []
-        for idx, c in enumerate(candidates[:30]):
+        for idx, c in enumerate(candidates[:35]):
             ts = c.get("creation_timestamp")
             if ts:
                 try:
@@ -311,24 +394,26 @@ def make_drafting_node(
                 date_str = "unknown"
 
             score = c.get("score", 0)
-            score_flag = " ⚠️LOW" if score < 0.09 else ""
+            comp_rank = c.get("composite_rank", score)
+            nima_val = (c.get("scores") or {}).get("nima_aesthetic", "N/A")
             fname = c.get("file_path", "").split("/")[-1]
 
             candidates_preview.append(
                 f"[{idx}] {fname} | Date: {date_str} | Type: {c.get('file_type')} | "
-                f"Score: {score:.3f}{score_flag} | Offset: {c.get('source_offset', 0):.1f}s | "
-                f"Gran: {c.get('granularity')} | Path: {c.get('file_path')}"
+                f"Rank: {comp_rank:.3f} | NIMA: {nima_val} | Offset: {c.get('source_offset', 0):.1f}s | "
+                f"Path: {c.get('file_path')}"
             )
 
         user_msg = (
             f"Prompt: {user_prompt}\n"
             f"Narrative Goal: {narrative}\n"
-            f"Target Duration: {target_duration}s\n"
+            f"Target Duration: {target_duration}s (Allowed: {target_duration}s - {int(target_duration * 1.25)}s)\n"
+            f"Required Segment Count: {min_segments} - {max_segments} moments\n"
         )
         if editor_feedback:
-            user_msg += f"\nPrevious Editor Feedback (Fix these issues!):\n- " + "\n- ".join(editor_feedback) + "\n"
+            user_msg += f"\nPrevious Editor Feedback:\n- " + "\n- ".join(editor_feedback) + "\n"
 
-        user_msg += "\nAvailable Candidates (sorted by relevance score, pick in DATE order):\n" + "\n".join(candidates_preview)
+        user_msg += "\nAvailable Candidates (sorted by quality rank):\n" + "\n".join(candidates_preview)
 
         storyboard_list: List[Dict[str, Any]] = []
         output: DraftingOutput = llm.structured_generate(
@@ -336,37 +421,54 @@ def make_drafting_node(
             user_prompt=user_msg,
             response_schema=DraftingOutput,
         )
+
+        # Candidates lookup by path
+        cand_by_path = {c.get("file_path"): c for c in candidates}
+
         for seg in output.storyboard:
             seg_dict = seg.model_dump()
-            # Ensure creation_timestamp is preserved from matched candidate
-            if not seg_dict.get("creation_timestamp"):
-                matched_cand = next((c for c in candidates if c.get("file_path") == seg_dict.get("file_path")), None)
-                if matched_cand:
-                    seg_dict["creation_timestamp"] = matched_cand.get("creation_timestamp")
+            matched = cand_by_path.get(seg_dict.get("file_path"))
+            if matched:
+                if not seg_dict.get("creation_timestamp"):
+                    seg_dict["creation_timestamp"] = matched.get("creation_timestamp")
+                if not seg_dict.get("file_id"):
+                    seg_dict["file_id"] = matched.get("file_id")
+                if not seg_dict.get("similarity_score"):
+                    seg_dict["similarity_score"] = matched.get("score")
+                if not seg_dict.get("composite_rank"):
+                    seg_dict["composite_rank"] = matched.get("composite_rank")
+                if not seg_dict.get("scores"):
+                    seg_dict["scores"] = matched.get("scores", {})
             storyboard_list.append(seg_dict)
 
-        # Fallback heuristic: If LLM produced 0 segments, pick candidates until duration is reached
-        if not storyboard_list and candidates:
-            # Sort chronologically for fallback
-            sorted_by_time = sorted(candidates, key=lambda c: c.get("creation_timestamp") or 0)
-            accumulated_dur = 0.0
-            used_paths = set()
-            for c in sorted_by_time:
-                if accumulated_dur >= target_duration:
+        # Deduplicate paths
+        unique_storyboard = []
+        seen_paths = set()
+        for s in storyboard_list:
+            fp = s.get("file_path")
+            if fp and fp not in seen_paths:
+                seen_paths.add(fp)
+                unique_storyboard.append(s)
+        storyboard_list = unique_storyboard
+
+        # -------------------------------------------------------------------
+        # POST-PROCESSING 1: Auto-Fill if Under Target Duration
+        # -------------------------------------------------------------------
+        current_duration = sum(s.get("duration", 3.0) for s in storyboard_list)
+        if current_duration < float(target_duration) and candidates:
+            logger.info("Drafted duration (%.1fs) < target (%ds). Auto-filling top candidates...", current_duration, target_duration)
+            for c in candidates:
+                if current_duration >= float(target_duration):
                     break
                 fp = c.get("file_path")
-                if fp in used_paths:
+                if fp in seen_paths:
                     continue
-                used_paths.add(fp)
+                seen_paths.add(fp)
 
-                dur = 3.0
-                if c.get("file_type") == "video":
-                    start_off = float(c.get("source_offset", 0.0))
-                    dur = 4.0
-                    end_off = start_off + dur
-                else:
-                    start_off = 0.0
-                    end_off = 0.0
+                is_vid = c.get("file_type") == "video"
+                dur = 4.0 if is_vid else 2.5
+                start_off = float(c.get("source_offset", 0.0))
+                end_off = start_off + dur if is_vid else 0.0
 
                 storyboard_list.append({
                     "file_path": fp,
@@ -374,14 +476,36 @@ def make_drafting_node(
                     "start_offset": start_off,
                     "end_offset": end_off,
                     "duration": dur,
-                    "segment_type": "video_clip" if c.get("file_type") == "video" else "image",
+                    "segment_type": "video_clip" if is_vid else "image",
                     "scene_id": c.get("scene_id"),
                     "retrieval_strategy": c.get("granularity", "frame"),
                     "similarity_score": c.get("score"),
+                    "composite_rank": c.get("composite_rank"),
+                    "scores": c.get("scores", {}),
                     "creation_timestamp": c.get("creation_timestamp"),
-                    "justification": f"High relevance match for {c.get('matched_query', 'prompt')}",
+                    "justification": f"Auto-fill to reach target duration (Rank={c.get('composite_rank', 0):.3f})",
                 })
-                accumulated_dur += dur
+                current_duration += dur
+
+        # -------------------------------------------------------------------
+        # POST-PROCESSING 2: Tail Trim if Over Maximum Upper Bound (+25%)
+        # -------------------------------------------------------------------
+        max_allowed_dur = float(target_duration) * 1.25
+        if current_duration > max_allowed_dur and len(storyboard_list) > min_segments:
+            logger.info("Drafted duration (%.1fs) > upper bound (%.1fs). Trimming lowest-scored segments...", current_duration, max_allowed_dur)
+            while current_duration > max_allowed_dur and len(storyboard_list) > min_segments:
+                # Find lowest ranked segment
+                lowest_idx = min(
+                    range(len(storyboard_list)),
+                    key=lambda i: storyboard_list[i].get("composite_rank") or storyboard_list[i].get("similarity_score") or 0.0
+                )
+                removed = storyboard_list.pop(lowest_idx)
+                current_duration -= removed.get("duration", 3.0)
+
+        # -------------------------------------------------------------------
+        # POST-PROCESSING 3: Force Strict Chronological Sort
+        # -------------------------------------------------------------------
+        storyboard_list.sort(key=lambda s: s.get("creation_timestamp") or 0)
 
         elapsed = round(time.time() - t0, 3)
         total_cut_dur = sum(s.get("duration", 0) for s in storyboard_list)
@@ -392,7 +516,7 @@ def make_drafting_node(
             "drafted_segments": len(storyboard_list),
             "total_duration": round(total_cut_dur, 1),
             "llm_telemetry": getattr(llm, "last_telemetry", {}),
-            "summary": f"Drafted {len(storyboard_list)} segments ({total_cut_dur:.1f}s) in {elapsed:.2f}s",
+            "summary": f"Drafted & chronologically sorted {len(storyboard_list)} segments ({total_cut_dur:.1f}s) in {elapsed:.2f}s",
         }
 
         if step_callback:
@@ -413,7 +537,7 @@ def make_drafting_node(
 
 
 # ---------------------------------------------------------------------------
-# 4. EDITOR NODE
+# 4. EDITOR NODE (v3: Multi-Factor Evaluation & Best-Draft Watermarking)
 # ---------------------------------------------------------------------------
 
 def make_editor_node(
@@ -424,19 +548,70 @@ def make_editor_node(
     """Factory creating the Editor critique node."""
 
     def editor_node(state: DirectorState) -> Dict[str, Any]:
-        import time
-        import datetime
         t0 = time.time()
         iteration_count = state.get("iteration_count", 0) + 1
         target_duration = state.get("target_duration", 30)
         storyboard = state.get("storyboard", [])
+        best_storyboard = state.get("best_storyboard", [])
+        best_composite = state.get("best_composite_score", 0.0)
 
-        # Calculate current total duration
         total_duration = sum(s.get("duration", 3.0) for s in storyboard)
+        min_allowed_dur = float(target_duration)
+        max_allowed_dur = float(target_duration) * 1.25
 
-        # If we reached max iterations, force approve to terminate loop
+        # 1. Deterministic Evaluation Dimensions
+        # A. Duration accuracy (0.0 to 1.0)
+        if total_duration < min_allowed_dur:
+            duration_score = max(0.0, total_duration / min_allowed_dur)
+        elif total_duration > max_allowed_dur:
+            duration_score = max(0.0, 1.0 - (total_duration - max_allowed_dur) / target_duration)
+        else:
+            duration_score = 1.0
+
+        # B. Pacing rhythm variety
+        durations = [s.get("duration", 3.0) for s in storyboard]
+        pacing_std = float(np.std(durations)) if durations else 0.0
+        pacing_variety_score = float(np.clip(pacing_std / 1.0, 0.2, 1.0))
+
+        # C. Visual quality mean (NIMA)
+        nima_scores = [(s.get("scores") or {}).get("nima_aesthetic", 0.5) for s in storyboard]
+        visual_quality_score = float(np.mean(nima_scores)) if nima_scores else 0.5
+
+        # D. Query relevance mean
+        rel_scores = [s.get("similarity_score") or 0.10 for s in storyboard]
+        query_rel_score = float(np.clip((np.mean(rel_scores) - 0.05) / 0.18, 0.0, 1.0)) if rel_scores else 0.5
+
+        # E. Diversity (time spread & media type mix)
+        types = {s.get("segment_type") for s in storyboard}
+        diversity_score = 1.0 if len(types) > 1 else 0.7
+
+        # Objective Composite Evaluation Score (0.0 - 10.0 scale)
+        composite_score = round(
+            10.0 * (
+                0.25 * duration_score +
+                0.20 * pacing_variety_score +
+                0.25 * visual_quality_score +
+                0.20 * query_rel_score +
+                0.10 * diversity_score
+            ),
+            2,
+        )
+
+        feedback_notes = []
+        if total_duration < min_allowed_dur:
+            feedback_notes.append(f"Timeline is too short ({total_duration:.1f}s vs target {target_duration}s). Add more segments.")
+        elif total_duration > max_allowed_dur:
+            feedback_notes.append(f"Timeline exceeds upper bound ({total_duration:.1f}s vs max {max_allowed_dur:.1f}s). Trim segments.")
+
+        # Best-Draft Watermarking
+        if composite_score >= best_composite or not best_storyboard:
+            best_storyboard = list(storyboard)
+            best_composite = composite_score
+            logger.info("New best storyboard watermarked at iteration %d (Score: %.2f/10)", iteration_count, best_composite)
+
+        # If reached max iterations, approve and revert to best draft if current degraded
         if iteration_count >= max_iterations:
-            logger.info("Director reached max iterations (%d). Forcing approval.", iteration_count)
+            logger.info("Director reached max iterations (%d). Finalizing best watermarked draft (Score: %.2f/10).", iteration_count, best_composite)
             elapsed = round(time.time() - t0, 3)
             telemetry_item = {
                 "node": "EDITOR",
@@ -444,8 +619,9 @@ def make_editor_node(
                 "latency_seconds": elapsed,
                 "approved": True,
                 "iteration": iteration_count,
-                "feedback": ["Max iterations reached; approving best draft."],
-                "summary": f"Editor approved draft (max iterations {iteration_count}) in {elapsed:.2f}s",
+                "composite_score": best_composite,
+                "feedback": ["Max iterations reached; approved highest-scoring storyboard."],
+                "summary": f"Editor finalized best storyboard (Score: {best_composite:.1f}/10, {len(best_storyboard)} moments) in {elapsed:.2f}s",
             }
             if step_callback:
                 step_callback(telemetry_item)
@@ -453,86 +629,30 @@ def make_editor_node(
             current_telemetry.append(telemetry_item)
             return {
                 "approved": True,
+                "storyboard": best_storyboard,
                 "iteration_count": iteration_count,
-                "editor_feedback": ["Max iterations reached; approving best draft."],
+                "best_storyboard": best_storyboard,
+                "best_composite_score": best_composite,
+                "editor_feedback": ["Approved highest-scoring storyboard."],
                 "agent_telemetry": current_telemetry,
             }
 
-        # Check duration bounds (tolerance ±25%)
-        min_dur = target_duration * 0.75
-        max_dur = target_duration * 1.25
-
-        feedback_notes = []
-        if total_duration < min_dur:
-            feedback_notes.append(
-                f"Timeline is too short ({total_duration:.1f}s vs target {target_duration}s). Add more segments."
-            )
-        elif total_duration > max_dur:
-            feedback_notes.append(
-                f"Timeline is too long ({total_duration:.1f}s vs target {target_duration}s). Trim or remove segments."
-            )
-
-        # Structural duplicate checks
-        seen_paths = set()
-        for s in storyboard:
-            fp = s.get("file_path")
-            if fp and fp in seen_paths:
-                feedback_notes.append(f"Duplicate file found in timeline: {fp.split('/')[-1]}. Replace with a unique moment.")
-            if fp:
-                seen_paths.add(fp)
-
-        # Ask LLM for quality critique if available
-        approved = len(feedback_notes) == 0
-        pacing_score = 8.0
+        # LLM qualitative critique
+        approved = (len(feedback_notes) == 0) and (composite_score >= 7.5)
         system_prompt = (
-            "You are a Senior Video Editor performing quality control on a proposed storyboard.\n"
-            "You MUST check ALL of the following and REJECT if any fail:\n\n"
-            "CHECKLIST:\n"
-            "1. DURATION: Total storyboard duration must be within ±25% of target.\n"
-            "2. DUPLICATES: No file should appear more than once. Reject if duplicates found.\n"
-            "3. CHRONOLOGICAL ORDER: Segments should be ordered by capture date (earliest → latest). "
-            "Reject if a segment from a later date appears before an earlier one.\n"
-            "4. VARIETY: There should be a mix of images and video clips. "
-            "Reject if all segments are the same type.\n"
-            "5. PACING: Durations should vary (not all exactly 3.0s). "
-            "At least some segments should be 2.0-2.5s and some 4.0-5.0s.\n"
-            "6. BACK-TO-BACK: No two consecutive segments should be from the same source video file.\n"
-            f"7. MINIMUM SEGMENTS: For a {target_duration}s video, expect at least "
-            f"{max(3, target_duration // 6)} segments.\n\n"
-            "If ALL checks pass, approve. Otherwise, list which checks failed and give specific fix instructions.\n"
-            "Output ONLY valid JSON."
+            "You are a Senior Film Editor performing quality control on a proposed storyboard.\n"
+            "Review pacing, variety, and cinematic flow. Output ONLY valid JSON."
         )
-
-        segment_details = []
-        for idx, s in enumerate(storyboard):
-            ts = s.get("creation_timestamp")
-            if ts:
-                try:
-                    dt = datetime.datetime.fromtimestamp(ts)
-                    date_str = dt.strftime("%b %d %H:%M")
-                except (ValueError, OSError):
-                    date_str = "unknown"
-            else:
-                date_str = "unknown"
-
-            fname = s.get("file_path", "").split("/")[-1]
-            segment_details.append(
-                f"  [{idx}] {fname} | Date: {date_str} | Type: {s.get('segment_type')} | "
-                f"Duration: {s.get('duration', 3.0):.1f}s | Score: {s.get('similarity_score', 'N/A')}"
-            )
-
         user_msg = (
-            f"Target Duration: {target_duration}s | Actual Duration: {total_duration:.1f}s\n"
-            f"Segment Count: {len(storyboard)}\n\n"
-            "Proposed Storyboard:\n" + "\n".join(segment_details)
+            f"Target Duration: {target_duration}s (Allowed: {min_allowed_dur}s - {max_allowed_dur}s)\n"
+            f"Actual Duration: {total_duration:.1f}s | Moments: {len(storyboard)}\n"
+            f"Composite Quality Score: {composite_score}/10\n"
         )
-
         critique: EditorOutput = llm.structured_generate(
             system_prompt=system_prompt,
             user_prompt=user_msg,
             response_schema=EditorOutput,
         )
-        pacing_score = critique.pacing_score
         if not critique.approved:
             approved = False
             feedback_notes.append(critique.feedback)
@@ -544,11 +664,12 @@ def make_editor_node(
             "stage": "EDITING",
             "latency_seconds": elapsed,
             "approved": approved,
-            "pacing_score": pacing_score,
+            "pacing_score": critique.pacing_score,
+            "composite_score": composite_score,
             "iteration": iteration_count,
             "feedback": feedback_notes,
             "llm_telemetry": getattr(llm, "last_telemetry", {}),
-            "summary": f"Editor {'approved ✅' if approved else 'requested revisions ⚠️'} (Pacing: {pacing_score}/10, Duration: {total_duration:.1f}s) in {elapsed:.2f}s",
+            "summary": f"Editor {'approved ✅' if approved else 'requested revisions ⚠️'} (Composite Score: {composite_score}/10, Duration: {total_duration:.1f}s) in {elapsed:.2f}s",
         }
 
         if step_callback:
@@ -562,7 +683,10 @@ def make_editor_node(
 
         return {
             "approved": approved,
+            "storyboard": storyboard if approved else (best_storyboard if best_storyboard else storyboard),
             "iteration_count": iteration_count,
+            "best_storyboard": best_storyboard,
+            "best_composite_score": best_composite,
             "editor_feedback": feedback_notes,
             "agent_telemetry": current_telemetry,
         }
@@ -582,9 +706,12 @@ def make_compiler_node(
     """Factory creating the Compiler node that persists the approved storyboard."""
 
     def compiler_node(state: DirectorState) -> Dict[str, Any]:
-        import time
         t0 = time.time()
         storyboard = state.get("storyboard", [])
+        best_storyboard = state.get("best_storyboard")
+        if best_storyboard and len(best_storyboard) > 0:
+            storyboard = best_storyboard
+
         segments: List[TimelineSegment] = []
 
         for s in storyboard:
@@ -598,6 +725,8 @@ def make_compiler_node(
                 scene_id=s.get("scene_id"),
                 retrieval_strategy=s.get("retrieval_strategy", "frame"),
                 similarity_score=s.get("similarity_score"),
+                composite_rank=s.get("composite_rank"),
+                scores=s.get("scores", {}),
                 justification=s.get("justification", ""),
                 creation_timestamp=s.get("creation_timestamp"),
             )
@@ -624,7 +753,7 @@ def make_compiler_node(
                                 segment_type=seg.segment_type,
                                 duration=seg.duration,
                                 start_offset=seg.start_offset,
-                                similarity_score=seg.similarity_score,
+                                similarity_score=seg.composite_rank or seg.similarity_score,
                                 time_bucket=idx,
                             )
                         )
@@ -658,4 +787,3 @@ def make_compiler_node(
         }
 
     return compiler_node
-

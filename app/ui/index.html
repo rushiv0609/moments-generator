@@ -53,6 +53,7 @@
                 <button class="tab-btn" data-tab="director">🎬 AI Director Studio</button>
                 <button class="tab-btn" data-tab="explorer">🔍 Media Search Explorer</button>
                 <button class="tab-btn" data-tab="playground">🧪 Semantic Playground</button>
+                <button class="tab-btn" data-tab="ranking">🏆 Ranking Playground</button>
                 <button class="tab-btn" data-tab="health">⚡ System & Hardware</button>
                 <button class="tab-btn" data-tab="config">⚙️ Configuration</button>
                 <button class="tab-btn" data-tab="data">📁 Data Browser</button>
@@ -319,7 +320,7 @@
                             </div>
                         </div>
 
-                        <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 15px; margin-top: 10px;">
+                        <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-top: 10px;">
                             <div class="form-group">
                                 <label for="directorDuration">Target Duration</label>
                                 <select id="directorDuration" class="input-select">
@@ -332,21 +333,20 @@
                             </div>
 
                             <div class="form-group">
-                                <label for="directorModelSelect">LLM Engine</label>
-                                <select id="directorModelSelect" class="input-select">
-                                    <option value="qwen3.5:9b" selected>Qwen 3.5 9B Vision-Language (Recommended)</option>
-                                    <option value="gemma4:e4b">Gemma 4 E4B</option>
-                                    <option value="gemma4:e2b">Gemma 4 E2B (Ultra Lightweight)</option>
-                                    <option value="mock">Mock Director (Instant Demo)</option>
+                                <label for="directorEngine">⚙️ Framework Engine</label>
+                                <select id="directorEngine" class="input-select">
+                                    <option value="langgraph" selected>🦜 LangGraph (StateGraph)</option>
+                                    <option value="pydantic">🐍 Pydantic (Zero-Dep State Machine)</option>
                                 </select>
                             </div>
 
                             <div class="form-group">
-                                <label for="directorRetrievalMode">Retrieval Granularity</label>
-                                <select id="directorRetrievalMode" class="input-select">
-                                    <option value="dual" selected>🌟 Dual (Scenes + Frames)</option>
-                                    <option value="scene">🎥 Scene-Level Only (Cinematic)</option>
-                                    <option value="frame">⚡ Frame-Level Only (Highlights)</option>
+                                <label for="directorModelSelect">LLM Model</label>
+                                <select id="directorModelSelect" class="input-select">
+                                    <option value="gemma4:e4b" selected>Gemma 4 E4B (Recommended)</option>
+                                    <option value="gemma4:e2b">Gemma 4 E2B (Lightweight)</option>
+                                    <option value="qwen3.5:9b">Qwen 3.5 9B</option>
+                                    <option value="mock">Mock Director (Instant Demo)</option>
                                 </select>
                             </div>
 
@@ -357,6 +357,100 @@
                                     <option value="16:9">16:9 Landscape (TV/YouTube)</option>
                                     <option value="9:16">9:16 Vertical (Reels/TikTok)</option>
                                 </select>
+                            </div>
+                        </div>
+
+                        <!-- Candidate Ranking Scoring Weights (Interactive Sliders) -->
+                        <div style="margin-top: 14px; padding: 14px 16px; background: rgba(15, 23, 42, 0.55); border: 1px solid var(--border-subtle); border-radius: 10px;">
+                            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; flex-wrap: wrap; gap: 8px;">
+                                <div style="display: flex; align-items: center; gap: 8px;">
+                                    <span style="font-size: 15px;">⚖️</span>
+                                    <div>
+                                        <strong style="font-size: 13px; color: #cbd5e1;">Candidate Ranking Weights</strong>
+                                        <span style="font-size: 11px; color: var(--text-muted); margin-left: 6px;">(Multi-signal composite scoring for moment retrieval)</span>
+                                    </div>
+                                </div>
+                                <div style="display: flex; align-items: center; gap: 10px;">
+                                    <span id="directorTotalWeightsNotice" style="font-size: 11px; color: var(--accent); font-family: var(--font-mono);">
+                                        Auto-normalized to 100%
+                                    </span>
+                                    <button type="button" class="btn btn-secondary btn-sm" id="btnResetDirectorWeights" title="Reset to POC optimal weights (45% Cosine, 45% NIMA, 10% Tech Composite)" style="padding: 3px 8px; font-size: 11px;">
+                                        ↺ Reset (45/45/10)
+                                    </button>
+                                </div>
+                            </div>
+
+                            <!-- 3x2 Grid of Sliders -->
+                            <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px 18px;">
+                                <!-- Slider: Cosine -->
+                                <div class="weight-control-item" style="margin-bottom: 0;">
+                                    <div class="weight-label-row">
+                                        <span class="weight-title"><span class="weight-dot" style="background: #6366f1;"></span> Cosine Sim</span>
+                                        <span class="weight-readout"><span id="valRawDirectorCosine">0.45</span> <small class="weight-norm-pct" id="valNormDirectorCosine">(45%)</small></span>
+                                    </div>
+                                    <input type="range" class="weight-slider" id="sliderDirectorCosine" min="0" max="1" step="0.01" value="0.45">
+                                </div>
+
+                                <!-- Slider: NIMA -->
+                                <div class="weight-control-item" style="margin-bottom: 0;">
+                                    <div class="weight-label-row">
+                                        <span class="weight-title"><span class="weight-dot" style="background: #10b981;"></span> NIMA Aesthetic</span>
+                                        <span class="weight-readout"><span id="valRawDirectorNima">0.45</span> <small class="weight-norm-pct" id="valNormDirectorNima">(45%)</small></span>
+                                    </div>
+                                    <input type="range" class="weight-slider" id="sliderDirectorNima" min="0" max="1" step="0.01" value="0.45">
+                                </div>
+
+                                <!-- Slider: Technical Composite -->
+                                <div class="weight-control-item" style="margin-bottom: 0;">
+                                    <div class="weight-label-row">
+                                        <span class="weight-title"><span class="weight-dot" style="background: #8b5cf6;"></span> Tech Composite</span>
+                                        <span class="weight-readout"><span id="valRawDirectorTechnical">0.10</span> <small class="weight-norm-pct" id="valNormDirectorTechnical">(10%)</small></span>
+                                    </div>
+                                    <input type="range" class="weight-slider" id="sliderDirectorTechnical" min="0" max="1" step="0.01" value="0.10">
+                                </div>
+
+                                <!-- Slider: Sharpness -->
+                                <div class="weight-control-item" style="margin-bottom: 0;">
+                                    <div class="weight-label-row">
+                                        <span class="weight-title"><span class="weight-dot" style="background: #f59e0b;"></span> Sharpness</span>
+                                        <span class="weight-readout"><span id="valRawDirectorSharpness">0.00</span> <small class="weight-norm-pct" id="valNormDirectorSharpness">(0%)</small></span>
+                                    </div>
+                                    <input type="range" class="weight-slider" id="sliderDirectorSharpness" min="0" max="1" step="0.01" value="0.00">
+                                </div>
+
+                                <!-- Slider: Contrast -->
+                                <div class="weight-control-item" style="margin-bottom: 0;">
+                                    <div class="weight-label-row">
+                                        <span class="weight-title"><span class="weight-dot" style="background: #06b6d4;"></span> Contrast</span>
+                                        <span class="weight-readout"><span id="valRawDirectorContrast">0.00</span> <small class="weight-norm-pct" id="valNormDirectorContrast">(0%)</small></span>
+                                    </div>
+                                    <input type="range" class="weight-slider" id="sliderDirectorContrast" min="0" max="1" step="0.005" value="0.00">
+                                </div>
+
+                                <!-- Slider: Colorfulness -->
+                                <div class="weight-control-item" style="margin-bottom: 0;">
+                                    <div class="weight-label-row">
+                                        <span class="weight-title"><span class="weight-dot" style="background: #ec4899;"></span> Colorfulness</span>
+                                        <span class="weight-readout"><span id="valRawDirectorColorfulness">0.00</span> <small class="weight-norm-pct" id="valNormDirectorColorfulness">(0%)</small></span>
+                                    </div>
+                                    <input type="range" class="weight-slider" id="sliderDirectorColorfulness" min="0" max="1" step="0.005" value="0.00">
+                                </div>
+                            </div>
+
+                            <!-- Real-time Multi-Signal Distribution Bar -->
+                            <div style="margin-top: 12px; padding-top: 10px; border-top: 1px solid rgba(255,255,255,0.06);">
+                                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; font-size: 11px; color: var(--text-muted);">
+                                    <span id="directorWeightDistributionSummary">Active Strategy: 45% Cosine + 45% NIMA + 10% Tech Composite</span>
+                                    <span id="directorActiveSignalsCount" style="color: #cbd5e1; font-weight: 500;">3 Signals Active</span>
+                                </div>
+                                <div class="distribution-bar" id="directorDistributionBar" style="display: flex; height: 6px; border-radius: 3px; overflow: hidden; background: rgba(255,255,255,0.08);">
+                                    <div id="distDirectorCosine" style="background: #6366f1; width: 45%; transition: width 0.15s ease;" title="Cosine Sim (45%)"></div>
+                                    <div id="distDirectorNima" style="background: #10b981; width: 45%; transition: width 0.15s ease;" title="NIMA Aesthetic (45%)"></div>
+                                    <div id="distDirectorTechnical" style="background: #8b5cf6; width: 10%; transition: width 0.15s ease;" title="Tech Composite (10%)"></div>
+                                    <div id="distDirectorSharpness" style="background: #f59e0b; width: 0%; transition: width 0.15s ease;" title="Sharpness (0%)"></div>
+                                    <div id="distDirectorContrast" style="background: #06b6d4; width: 0%; transition: width 0.15s ease;" title="Contrast (0%)"></div>
+                                    <div id="distDirectorColorfulness" style="background: #ec4899; width: 0%; transition: width 0.15s ease;" title="Colorfulness (0%)"></div>
+                                </div>
                             </div>
                         </div>
 
@@ -542,17 +636,14 @@
                                     ✨ ⚡ Render MP4
                                 </button>
                                 <div class="timeline-switcher" style="display: flex; gap: 6px; flex-wrap: wrap;">
-                                    <button type="button" class="btn btn-secondary active alt-btn" data-alt="alt_c_dual" id="btnAltC">
-                                        🌟 Alt-C: Dual
+                                    <button type="button" class="btn btn-secondary active alt-btn" data-alt="candidate_3" id="btnCandidate3">
+                                        🧭 Candidate 3: Journey
                                     </button>
-                                    <button type="button" class="btn btn-secondary alt-btn" data-alt="alt_a_scene" id="btnAltA">
-                                        🎥 Alt-A: Scene
+                                    <button type="button" class="btn btn-secondary alt-btn" data-alt="candidate_1" id="btnCandidate1">
+                                        🏔️ Candidate 1: Cinematic
                                     </button>
-                                    <button type="button" class="btn btn-secondary alt-btn" data-alt="alt_b_frame" id="btnAltB">
-                                        ⚡ Alt-B: Frame
-                                    </button>
-                                    <button type="button" class="btn btn-secondary alt-btn" data-alt="alt_d_heuristic" id="btnAltD" style="border-color: rgba(56, 189, 248, 0.4);">
-                                        📊 Alt-D: Time
+                                    <button type="button" class="btn btn-secondary alt-btn" data-alt="candidate_2" id="btnCandidate2">
+                                        👥 Candidate 2: Personal
                                     </button>
                                 </div>
                             </div>
@@ -942,6 +1033,262 @@
                                 </div>
                             </div>
                         </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Tab: Ranking Playground -->
+            <section class="tab-pane" id="pane-ranking">
+                <div class="ranking-layout-container">
+                    <!-- Top Query Card -->
+                    <div class="card glass-card" style="margin-bottom: 20px;">
+                        <div class="card-header">
+                            <div>
+                                <h2>🏆 Live Ranking & Scoring Playground</h2>
+                                <p class="card-desc" style="margin-top: 4px;">
+                                    Retrieve candidate frames with embeddings, then interactively test, tune, and compare composite re-ranking strategies in real-time.
+                                </p>
+                            </div>
+                            <div style="display: flex; gap: 8px; align-items: center;">
+                                <span class="badge badge-secondary" id="rankingStatusBadge">Ready</span>
+                            </div>
+                        </div>
+
+                        <!-- Search Query Form -->
+                        <div class="ranking-query-bar" style="margin-top: 15px;">
+                            <div style="display: flex; gap: 10px; flex-wrap: wrap; align-items: center;">
+                                <div style="flex: 1; min-width: 280px; position: relative;">
+                                    <input type="text" id="rankingQueryInput" class="input-text"
+                                        placeholder="e.g. scenic sunset with dramatic mountains or friends dining"
+                                        value="friends having dinner outdoors on a summer evening" style="width: 100%; font-size: 14px; padding: 10px 14px;">
+                                </div>
+                                <div style="display: flex; gap: 8px; align-items: center;">
+                                    <select id="rankingTopK" class="input-select" style="min-width: 90px; padding: 9px 10px; font-size: 13px;">
+                                        <option value="25">Top 25</option>
+                                        <option value="50" selected>Top 50</option>
+                                        <option value="100">Top 100</option>
+                                    </select>
+                                    <select id="rankingGranularity" class="input-select" style="min-width: 110px; padding: 9px 10px; font-size: 13px;">
+                                        <option value="all" selected>All Granularities</option>
+                                        <option value="frame">Frames Only</option>
+                                        <option value="scene">Scenes Only</option>
+                                    </select>
+                                    <select id="rankingFileType" class="input-select" style="min-width: 100px; padding: 9px 10px; font-size: 13px;">
+                                        <option value="all" selected>All Media</option>
+                                        <option value="image">Photos Only</option>
+                                        <option value="video">Videos Only</option>
+                                    </select>
+                                    <button type="button" class="btn btn-primary" id="btnFetchRankingCandidates" style="white-space: nowrap; padding: 10px 18px;">
+                                        ⚡ Fetch Candidates
+                                    </button>
+                                </div>
+                            </div>
+
+                            <!-- Query Suggestion Chips -->
+                            <div class="quick-chips" style="margin-top: 10px;">
+                                <span class="chip ranking-chip" data-query="friends having dinner outdoors on a summer evening">🍽️ friends dinner</span>
+                                <span class="chip ranking-chip" data-query="dramatic sunset over mountain peaks">🌄 mountain sunset</span>
+                                <span class="chip ranking-chip" data-query="beach ocean waves sunny day">🏖️ ocean beach</span>
+                                <span class="chip ranking-chip" data-query="vibrant colorful flowers in nature">🌸 colorful flowers</span>
+                                <span class="chip ranking-chip" data-query="candid smiling portraits laughing people">😄 candid smiles</span>
+                                <span class="chip ranking-chip" data-query="outdoor action trekking adventure">🥾 trekking adventure</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Main Workspace: Sidebar + Results Grid -->
+                    <div class="ranking-workspace-grid">
+                        <!-- Left Sidebar: Strategy & Weights Controls -->
+                        <div class="ranking-sidebar">
+                            <div class="card glass-card" style="padding: 18px; position: sticky; top: 20px;">
+                                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+                                    <h3 style="font-size: 15px; font-weight: 600; display: flex; align-items: center; gap: 6px;">
+                                        <span>⚙️ Ranking Strategy</span>
+                                    </h3>
+                                    <button type="button" class="btn btn-secondary btn-sm" id="btnResetRankingWeights" title="Reset to default weights" style="padding: 3px 8px; font-size: 11px;">
+                                        ↺ Reset
+                                    </button>
+                                </div>
+
+                                <!-- Experiment Name -->
+                                <div style="margin-bottom: 14px;">
+                                    <label for="rankingExperimentName" style="font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text-muted); font-weight: 600; display: block; margin-bottom: 4px;">
+                                        Experiment Title
+                                    </label>
+                                    <input type="text" id="rankingExperimentName" class="input-text" value="POC 1: Cinematic Balance" style="font-size: 12px; padding: 6px 10px;">
+                                </div>
+
+                                <!-- Profile Preset Quick-Fills (All Editable) -->
+                                <div style="margin-bottom: 16px;">
+                                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+                                        <label style="font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text-muted); font-weight: 600;">
+                                            Quick Presets (Editable)
+                                        </label>
+                                    </div>
+                                    <div class="ranking-preset-group">
+                                        <button type="button" class="btn-preset active" data-preset="cinematic" title="Cinematic Epic: Cos 0.40, NIMA 0.30, Sharp 0.05, Contrast 0.035, Color 0.015, Tech 0.10">🎬 Cinematic</button>
+                                        <button type="button" class="btn-preset" data-preset="personal" title="Personal Moments: Cos 0.50, NIMA 0.15, Sharp 0.125, Contrast 0.087, Color 0.037, Tech 0.25">👥 Personal</button>
+                                        <button type="button" class="btn-preset" data-preset="journey" title="Balanced Journey: Cos 0.50, NIMA 0.20, Sharp 0.075, Contrast 0.052, Color 0.022, Tech 0.15">🗺️ Journey</button>
+                                        <button type="button" class="btn-preset" data-preset="cosine_only" title="Pure Semantic Vector Match: Cos 1.0, All other signals 0.0">🎯 Cosine Only</button>
+                                        <button type="button" class="btn-preset" data-preset="aesthetic_heavy" title="Aesthetic Heavy: NIMA 0.50, Cosine 0.30, Tech 0.20">✨ Aesthetic 1st</button>
+                                        <button type="button" class="btn-preset" data-preset="clarity" title="Clarity Focus: Sharpness 0.40, Contrast 0.20, Cosine 0.30, NIMA 0.10">🔍 High Clarity</button>
+                                    </div>
+                                </div>
+
+                                <div style="border-top: 1px solid var(--border-color); margin: 12px 0;"></div>
+
+                                <!-- Interactive Weight Sliders -->
+                                <div style="margin-bottom: 14px;">
+                                    <div style="display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 10px;">
+                                        <label style="font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text-muted); font-weight: 600;">
+                                            Signal Weights
+                                        </label>
+                                        <span id="rankingTotalWeightsNotice" style="font-size: 11px; color: var(--accent); font-family: var(--font-mono);">
+                                            Auto-normalized to 100%
+                                        </span>
+                                    </div>
+
+                                    <!-- Slider: Cosine -->
+                                    <div class="weight-control-item">
+                                        <div class="weight-label-row">
+                                            <span class="weight-title"><span class="weight-dot" style="background: #6366f1;"></span> Cosine Sim</span>
+                                            <span class="weight-readout"><span id="valRawCosine">0.40</span> <small class="weight-norm-pct" id="valNormCosine">(44.4%)</small></span>
+                                        </div>
+                                        <input type="range" class="weight-slider" id="sliderCosine" min="0" max="1" step="0.01" value="0.40">
+                                    </div>
+
+                                    <!-- Slider: NIMA -->
+                                    <div class="weight-control-item">
+                                        <div class="weight-label-row">
+                                            <span class="weight-title"><span class="weight-dot" style="background: #10b981;"></span> NIMA Aesthetic</span>
+                                            <span class="weight-readout"><span id="valRawNima">0.30</span> <small class="weight-norm-pct" id="valNormNima">(33.3%)</small></span>
+                                        </div>
+                                        <input type="range" class="weight-slider" id="sliderNima" min="0" max="1" step="0.01" value="0.30">
+                                    </div>
+
+                                    <!-- Slider: Sharpness -->
+                                    <div class="weight-control-item">
+                                        <div class="weight-label-row">
+                                            <span class="weight-title"><span class="weight-dot" style="background: #f59e0b;"></span> Sharpness</span>
+                                            <span class="weight-readout"><span id="valRawSharpness">0.05</span> <small class="weight-norm-pct" id="valNormSharpness">(5.6%)</small></span>
+                                        </div>
+                                        <input type="range" class="weight-slider" id="sliderSharpness" min="0" max="1" step="0.01" value="0.05">
+                                    </div>
+
+                                    <!-- Slider: Contrast -->
+                                    <div class="weight-control-item">
+                                        <div class="weight-label-row">
+                                            <span class="weight-title"><span class="weight-dot" style="background: #06b6d4;"></span> Contrast</span>
+                                            <span class="weight-readout"><span id="valRawContrast">0.035</span> <small class="weight-norm-pct" id="valNormContrast">(3.9%)</small></span>
+                                        </div>
+                                        <input type="range" class="weight-slider" id="sliderContrast" min="0" max="1" step="0.005" value="0.035">
+                                    </div>
+
+                                    <!-- Slider: Colorfulness -->
+                                    <div class="weight-control-item">
+                                        <div class="weight-label-row">
+                                            <span class="weight-title"><span class="weight-dot" style="background: #ec4899;"></span> Colorfulness</span>
+                                            <span class="weight-readout"><span id="valRawColorfulness">0.015</span> <small class="weight-norm-pct" id="valNormColorfulness">(1.7%)</small></span>
+                                        </div>
+                                        <input type="range" class="weight-slider" id="sliderColorfulness" min="0" max="1" step="0.005" value="0.015">
+                                    </div>
+
+                                    <!-- Slider: Technical Composite -->
+                                    <div class="weight-control-item">
+                                        <div class="weight-label-row">
+                                            <span class="weight-title"><span class="weight-dot" style="background: #8b5cf6;"></span> Tech Composite</span>
+                                            <span class="weight-readout"><span id="valRawTechnical">0.10</span> <small class="weight-norm-pct" id="valNormTechnical">(11.1%)</small></span>
+                                        </div>
+                                        <input type="range" class="weight-slider" id="sliderTechnical" min="0" max="1" step="0.01" value="0.10">
+                                    </div>
+                                </div>
+
+                                <!-- Action Buttons -->
+                                <div style="display: flex; flex-direction: column; gap: 8px; margin-top: 16px;">
+                                    <button type="button" class="btn btn-primary" id="btnReRankNow" style="width: 100%; padding: 10px; font-weight: 600; display: flex; align-items: center; justify-content: center; gap: 6px;">
+                                        <span>🔄 Re-Rank Candidates</span>
+                                    </button>
+                                    <button type="button" class="btn btn-secondary" id="btnPinExperiment" style="width: 100%; padding: 8px; font-size: 12px; display: flex; align-items: center; justify-content: center; gap: 6px;">
+                                        <span>📌 Pin Strategy for Comparison</span>
+                                    </button>
+                                </div>
+
+                                <!-- Live Weights Summary Mini Pill Bar -->
+                                <div style="margin-top: 14px; padding: 10px; background: rgba(0,0,0,0.25); border-radius: 8px; font-size: 11px;">
+                                    <div style="display: flex; justify-content: space-between; margin-bottom: 6px; color: var(--text-muted);">
+                                        <span>Weight Distribution:</span>
+                                        <span id="rankingActiveSignalsCount" style="color: var(--text-primary); font-weight: 500;">6 Signals Active</span>
+                                    </div>
+                                    <div class="distribution-bar" id="rankingDistributionBar" style="display: flex; height: 6px; border-radius: 3px; overflow: hidden; background: rgba(255,255,255,0.08);">
+                                        <div class="dist-seg" id="distCosine" style="background: #6366f1; width: 44.4%;"></div>
+                                        <div class="dist-seg" id="distNima" style="background: #10b981; width: 33.3%;"></div>
+                                        <div class="dist-seg" id="distSharpness" style="background: #f59e0b; width: 5.6%;"></div>
+                                        <div class="dist-seg" id="distContrast" style="background: #06b6d4; width: 3.9%;"></div>
+                                        <div class="dist-seg" id="distColorfulness" style="background: #ec4899; width: 1.7%;"></div>
+                                        <div class="dist-seg" id="distTechnical" style="background: #8b5cf6; width: 11.1%;"></div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Right Main Area: Ranked Candidates Grid -->
+                        <div class="ranking-main">
+                            <!-- Results Header Bar -->
+                            <div class="card glass-card" style="padding: 14px 18px; margin-bottom: 16px;">
+                                <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px;">
+                                    <div>
+                                        <div style="display: flex; align-items: center; gap: 8px;">
+                                            <h3 style="font-size: 16px; margin: 0;" id="rankingResultsTitle">Ranked Candidates</h3>
+                                            <span class="badge badge-accent" id="rankingCandidatesCountBadge">0 items</span>
+                                        </div>
+                                        <div style="font-size: 12px; color: var(--text-muted); margin-top: 3px;" id="rankingStrategySummary">
+                                            Formula: 44% Cosine + 33% NIMA + 6% Sharp + 4% Contrast + 2% Color + 11% Tech
+                                        </div>
+                                    </div>
+                                    <div style="display: flex; gap: 8px; align-items: center;">
+                                        <input type="text" id="rankingSearchFilter" class="input-text" placeholder="Filter by filename..." style="font-size: 12px; padding: 5px 10px; width: 160px;">
+                                        <select id="rankingSortMode" class="input-select" style="font-size: 12px; padding: 5px 10px;">
+                                            <option value="composite_desc" selected>Sort: Composite Rank (High → Low)</option>
+                                            <option value="cosine_desc">Sort: Cosine Similarity</option>
+                                            <option value="nima_desc">Sort: NIMA Aesthetic</option>
+                                            <option value="sharpness_desc">Sort: Sharpness</option>
+                                            <option value="contrast_desc">Sort: Contrast</option>
+                                            <option value="colorfulness_desc">Sort: Colorfulness</option>
+                                            <option value="technical_desc">Sort: Technical Composite</option>
+                                        </select>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- Initial / Empty State -->
+                            <div id="rankingEmptyState" class="card glass-card" style="padding: 48px 24px; text-align: center;">
+                                <div style="font-size: 42px; margin-bottom: 12px;">🏆</div>
+                                <h3 style="font-size: 18px; margin-bottom: 6px;">No Candidate Results Loaded Yet</h3>
+                                <p style="font-size: 13px; color: var(--text-muted); max-width: 480px; margin: 0 auto 18px;">
+                                    Enter a search query above and click <strong>"⚡ Fetch Candidates"</strong> to retrieve embeddings and quality scores from your media library.
+                                </p>
+                            </div>
+
+                            <!-- Candidates Grid -->
+                            <div id="rankingResultsGrid" class="ranking-grid" style="display: none;"></div>
+                        </div>
+                    </div>
+
+                    <!-- Bottom Section: Pinned Experiments Comparison Lanes -->
+                    <div class="card glass-card" id="rankingPinnedSection" style="margin-top: 24px; display: none;">
+                        <div class="card-header" style="border-bottom: 1px solid var(--border-color); padding-bottom: 12px; margin-bottom: 14px;">
+                            <div>
+                                <h3 style="font-size: 16px; margin: 0; display: flex; align-items: center; gap: 8px;">
+                                    <span>📌 Pinned Strategy Comparisons</span>
+                                    <span class="badge badge-accent" id="pinnedCountBadge">0 pinned</span>
+                                </h3>
+                                <p class="card-desc" style="margin-top: 4px;">
+                                    Compare candidate order and top-scoring frames side-by-side across different weight combinations.
+                                </p>
+                            </div>
+                            <button type="button" class="btn btn-secondary btn-sm" id="btnClearAllPinned">Clear All Pinned</button>
+                        </div>
+                        <div id="rankingPinnedContainer" style="display: flex; flex-direction: column; gap: 14px;"></div>
                     </div>
                 </div>
             </section>

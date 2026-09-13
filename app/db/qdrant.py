@@ -42,6 +42,7 @@ class VectorPoint:
     scene_end: Optional[float] = None     # Scene end timestamp in seconds
     scene_frame_count: Optional[int] = None  # Number of frames in this scene
     is_scene_representative: bool = False  # True for the mean summary vector of a scene
+    scores: Dict[str, float] = field(default_factory=dict)  # Extensible quality scores (nima, sharpness, etc.)
     extra: Dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self):
@@ -66,6 +67,7 @@ class VectorPoint:
             "scene_end": self.scene_end,
             "scene_frame_count": self.scene_frame_count,
             "is_scene_representative": self.is_scene_representative,
+            "scores": self.scores,
         }
         if self.extra:
             payload.update(self.extra)
@@ -99,6 +101,7 @@ class SearchResult:
     scene_start: Optional[float] = None
     scene_end: Optional[float] = None
     is_scene_representative: bool = False
+    scores: Dict[str, float] = field(default_factory=dict)
     payload: Dict[str, Any] = field(default_factory=dict)
 
 
@@ -455,6 +458,7 @@ class QdrantVectorDB:
                     scene_start=payload.get("scene_start"),
                     scene_end=payload.get("scene_end"),
                     is_scene_representative=payload.get("is_scene_representative", False),
+                    scores=payload.get("scores", {}),
                     payload=payload,
                 )
             )
@@ -494,6 +498,7 @@ class QdrantVectorDB:
                 scene_start=payload.get("scene_start"),
                 scene_end=payload.get("scene_end"),
                 is_scene_representative=payload.get("is_scene_representative", False),
+                scores=payload.get("scores", {}),
                 payload=payload,
             )
             vec = rec.vector if isinstance(rec.vector, list) else list(rec.vector)
@@ -543,6 +548,7 @@ class QdrantVectorDB:
                         scene_start=payload.get("scene_start"),
                         scene_end=payload.get("scene_end"),
                         is_scene_representative=payload.get("is_scene_representative", False),
+                        scores=payload.get("scores", {}),
                         payload=payload,
                     )
                 )

@@ -39,10 +39,14 @@ from app.api.schemas import (
     IndexJobResponse,
     WorkspaceSearchResponse,
     WorkspaceSearchResultItem,
+    RankingSearchResponse,
+    RankingSearchResultItem,
     DirectorModelsResponse,
     DirectorModelItem,
     RenderVideoRequest,
     RenderVideoResponse,
+    SetEpicReferencesRequest,
+    EpicReferencesResponse,
 )
 from app.db.manifest import ManifestDB
 from app.db.qdrant import QdrantVectorDB
@@ -787,6 +791,82 @@ def search_workspace_media(
     )
 
 
+@router.get("/workspace/search/ranked", response_model=RankingSearchResponse)
+def search_workspace_ranked(
+    query: str = Query(..., min_length=1, description="Natural language semantic search query"),
+    top_k: int = Query(default=50, ge=1, le=200, description="Max candidate results to retrieve for ranking experiments"),
+    granularity: Optional[str] = Query(default="all", description="'all' | 'frame' | 'scene'"),
+    file_type: Optional[str] = Query(default="all", description="'all' | 'image' | 'video'"),
+):
+    """
+    Candidate retrieval endpoint for the Ranking Playground.
+    Retrieves candidates with raw SigLIP 2 cosine similarity plus all stored quality scores
+    (NIMA aesthetic, sharpness, contrast, colorfulness, technical composite, epic composite).
+    """
+    workspace_mgr = get_workspace_manager()
+    if not workspace_mgr.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="No active project workspace set. Please activate a workspace first.",
+        )
+
+    qdrant = workspace_mgr.get_qdrant_db()
+    embedder = get_active_embedder()
+
+    # Compute text query embedding (L2 normalized 768-dim vector)
+    query_vec = embedder.embed_text(query)
+
+    granularity_val = None if granularity == "all" else granularity
+    file_type_val = None if file_type == "all" else file_type
+
+    results = qdrant.search(
+        collection_name="media_embeddings",
+        query_vector=query_vec,
+        limit=top_k,
+        granularity=granularity_val,
+        file_type=file_type_val,
+    )
+
+    items = []
+    for r in results:
+        target_offset = r.source_offset if r.source_offset is not None else (r.scene_start or 0.0)
+
+        if r.file_type == "video":
+            thumb_url = f"/api/v1/media/file?path={r.file_path}&offset={target_offset}&thumbnail=true"
+            playback_url = f"/api/v1/media/file?path={r.file_path}#t={target_offset}"
+        else:
+            thumb_url = f"/api/v1/media/file?path={r.file_path}"
+            playback_url = f"/api/v1/media/file?path={r.file_path}"
+
+        items.append(
+            RankingSearchResultItem(
+                point_id=r.point_id,
+                score=round(r.score, 4),
+                file_path=r.file_path,
+                file_name=Path(r.file_path).name,
+                file_type=r.file_type,
+                frame_index=r.frame_index,
+                source_offset=r.source_offset,
+                granularity=r.granularity,
+                scene_id=r.scene_id,
+                scene_start=r.scene_start,
+                scene_end=r.scene_end,
+                is_scene_representative=r.is_scene_representative,
+                media_url=f"/api/v1/media/file?path={r.file_path}",
+                thumbnail_url=thumb_url,
+                playback_url=playback_url,
+                scores=r.scores or {},
+            )
+        )
+
+    return RankingSearchResponse(
+        query=query,
+        workspace_dir=str(workspace_mgr.workspace_path),
+        total_results=len(items),
+        results=items,
+    )
+
+
 @router.get("/workspace/video/scenes")
 def get_video_scenes_breakdown(
     file_path: str = Query(..., description="Absolute path to video file"),
@@ -1149,7 +1229,12 @@ def generate_moments_job(request: GenerateRequest):
         model_name=request.model_name,
         api_key=request.api_key,
         retrieval_mode=request.retrieval_mode,
+        creative_profile=request.creative_profile,
+        engine=request.engine,
+        epic_reference_files=request.epic_reference_files,
         generate_alternatives=request.generate_alternatives,
+        scoring_signals=request.scoring_signals,
+        scoring_weights=request.scoring_weights,
     )
 
     return JobResponse(
@@ -1160,6 +1245,66 @@ def generate_moments_job(request: GenerateRequest):
         created_at=job.created_at,
         message=job.message,
         workspace_dir=workspace_dir,
+    )
+
+
+# =========================================================================
+# Epic Reference Photos Management
+# =========================================================================
+
+_ACTIVE_EPIC_REFERENCES: Dict[str, List[str]] = {}
+
+@router.post("/director/epic-references", response_model=EpicReferencesResponse)
+def set_epic_references(request: SetEpicReferencesRequest):
+    """
+    Register a set of photo file paths that the user considers 'epic' reference standards.
+    """
+    workspace_mgr = get_workspace_manager()
+    ws_path = request.workspace_path or (str(workspace_mgr.workspace_path) if workspace_mgr.is_active else "default")
+    valid_files = [f for f in request.file_paths if Path(f).exists()]
+    
+    _ACTIVE_EPIC_REFERENCES[ws_path] = valid_files
+    return EpicReferencesResponse(
+        workspace_dir=ws_path,
+        active=len(valid_files) > 0,
+        reference_count=len(valid_files),
+        files=valid_files,
+        message=f"Registered {len(valid_files)} epic reference photos.",
+    )
+
+
+@router.get("/director/epic-references", response_model=EpicReferencesResponse)
+def get_epic_references(workspace_path: Optional[str] = None):
+    """
+    Retrieve active epic reference photos for a workspace.
+    """
+    workspace_mgr = get_workspace_manager()
+    ws_path = workspace_path or (str(workspace_mgr.workspace_path) if workspace_mgr.is_active else "default")
+    files = _ACTIVE_EPIC_REFERENCES.get(ws_path, [])
+    return EpicReferencesResponse(
+        workspace_dir=ws_path,
+        active=len(files) > 0,
+        reference_count=len(files),
+        files=files,
+        message="Active epic references retrieved.",
+    )
+
+
+@router.delete("/director/epic-references", response_model=EpicReferencesResponse)
+def clear_epic_references(workspace_path: Optional[str] = None):
+    """
+    Clear active epic reference photos for a workspace.
+    """
+    workspace_mgr = get_workspace_manager()
+    ws_path = workspace_path or (str(workspace_mgr.workspace_path) if workspace_mgr.is_active else "default")
+    if ws_path in _ACTIVE_EPIC_REFERENCES:
+        del _ACTIVE_EPIC_REFERENCES[ws_path]
+    return EpicReferencesResponse(
+        workspace_dir=ws_path,
+        active=False,
+        reference_count=0,
+        files=[],
+        message="Cleared epic references.",
     )
 
 

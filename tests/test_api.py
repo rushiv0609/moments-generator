@@ -200,4 +200,17 @@ def test_workspace_search_endpoint(tmp_path):
     assert data["query"] == "blue mountain"
     assert data["workspace_dir"] == str(ws_dir.resolve())
 
+    # Search workspace ranked (for Ranking Playground)
+    res_ranked = client.get("/api/v1/workspace/search/ranked?query=blue+mountain&top_k=5")
+    assert res_ranked.status_code == 200
+    ranked_data = res_ranked.json()
+    assert "query" in ranked_data
+    assert "results" in ranked_data
+    assert ranked_data["query"] == "blue mountain"
+    assert ranked_data["workspace_dir"] == str(ws_dir.resolve())
+    if ranked_data["results"]:
+        first_item = ranked_data["results"][0]
+        assert "scores" in first_item
+        assert isinstance(first_item["scores"], dict)
+
 

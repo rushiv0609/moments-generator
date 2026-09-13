@@ -294,7 +294,12 @@ class JobManager:
         model_name: str = "qwen2.5:7b",
         api_key: Optional[str] = None,
         retrieval_mode: str = "dual",
+        creative_profile: str = "journey",
+        engine: str = "langgraph",
+        epic_reference_files: Optional[List[str]] = None,
         generate_alternatives: bool = True,
+        scoring_signals: Optional[List[str]] = None,
+        scoring_weights: Optional[Dict[str, float]] = None,
     ) -> Job:
         """Enqueue and launch a background Director Agent video generation job."""
         job_id = f"job_gen_{uuid.uuid4().hex[:8]}"
@@ -321,7 +326,12 @@ class JobManager:
                 model_name,
                 api_key,
                 retrieval_mode,
+                creative_profile,
+                engine,
+                epic_reference_files,
                 generate_alternatives,
+                scoring_signals,
+                scoring_weights,
             ),
             daemon=True,
             name=f"Director-{job_id}",
@@ -339,15 +349,20 @@ class JobManager:
         model_name: str,
         api_key: Optional[str],
         retrieval_mode: str,
+        creative_profile: str,
+        engine_name: str,
+        epic_reference_files: Optional[List[str]],
         generate_alternatives: bool,
+        scoring_signals: Optional[List[str]] = None,
+        scoring_weights: Optional[Dict[str, float]] = None,
     ):
-        """Worker thread executing the LangGraph Director state machine."""
+        """Worker thread executing the Director state machine engine."""
         with self._lock:
             job = self._jobs[job_id]
             job.status = JobStatus.RUNNING
             job.started_at = time.time()
             job.stage = "PLANNING"
-            job.message = f"Director planning storyline for '{prompt}'..."
+            job.message = f"Director ({engine_name}) planning storyline for '{prompt}'..."
             job.progress = 15.0
 
         ev_plan = JobEvent(
@@ -356,13 +371,16 @@ class JobManager:
             progress_pct=15.0,
             stage="PLANNING",
             message=job.message,
-            data={"prompt": prompt, "model": model_name},
+            data={"prompt": prompt, "model": model_name, "engine": engine_name},
         )
         self.broadcast_event(job_id, ev_plan)
 
         try:
             from app.core.embedder import MLXEmbedder, PyTorchMPSEmbedder, HAS_MLX
-            from app.core.director import DirectorAgent, get_director_llm, MockDirectorLLM
+            from app.core.director import get_director_llm
+            from app.core.director.engine import create_director_engine
+            from app.core.extractor import decode_image
+            import numpy as np
 
             workspace_mgr = get_workspace_manager()
             workspace_mgr.set_workspace(workspace_dir, corpus_path=corpus_dir)
@@ -370,25 +388,39 @@ class JobManager:
             qdrant = workspace_mgr.get_qdrant_db()
             collection_name = getattr(workspace_mgr, "collection_name", "media_embeddings")
 
-            # Initialize embedder and LLM (fail-fast without silent mock fallbacks)
             embedder = MLXEmbedder() if HAS_MLX else PyTorchMPSEmbedder()
             llm = get_director_llm(model_name=model_name, api_key=api_key, fallback_to_mock=False)
 
-            agent = DirectorAgent(
+            # Compute epic reference vector if reference images are provided
+            epic_ref_vec = None
+            if epic_reference_files:
+                ref_pixels = []
+                for fp in epic_reference_files:
+                    if Path(fp).exists():
+                        fd = decode_image(fp)
+                        if fd and fd.pixels is not None:
+                            ref_pixels.append(fd.pixels)
+                if ref_pixels:
+                    vecs = embedder.embed_images(ref_pixels)
+                    mean_v = np.mean(vecs, axis=0).astype(np.float32)
+                    norm = np.linalg.norm(mean_v)
+                    if norm > 0:
+                        epic_ref_vec = (mean_v / norm).tolist()
+
+            engine = create_director_engine(
+                engine_name=engine_name,
                 embedder=embedder,
                 qdrant=qdrant,
                 collection_name=collection_name,
                 llm=llm,
                 manifest=manifest,
-                model_name=model_name,
-                api_key=api_key,
             )
 
             # Stage: RETRIEVAL
             with self._lock:
                 job.stage = "RETRIEVAL"
                 job.progress = 40.0
-                job.message = "Searching vector database for visual moments..."
+                job.message = "Searching vector database with aesthetic ranking..."
             self.broadcast_event(
                 job_id,
                 JobEvent(job_id=job_id, event_type="progress", progress_pct=40.0, stage="RETRIEVAL", message=job.message),
@@ -398,6 +430,7 @@ class JobManager:
             with self._lock:
                 job.stage = "DRAFTING"
                 job.progress = 70.0
+
             def on_step_telemetry(step_data: Dict[str, Any]):
                 stage_name = step_data.get("stage", "DRAFTING")
                 node_name = step_data.get("node", "AGENT")
@@ -418,17 +451,22 @@ class JobManager:
                 )
 
             if generate_alternatives:
-                alternatives = agent.generate_alternatives(
+                alternatives = engine.generate_alternatives(
                     prompt=prompt,
                     target_duration=target_duration,
                     job_id_prefix=job_id,
+                    epic_reference_vector=epic_ref_vec,
+                    scoring_signals=scoring_signals,
+                    scoring_weights=scoring_weights,
                     step_callback=on_step_telemetry,
                 )
-                primary_state = alternatives.get("alt_c_dual") or alternatives.get("alt_a_scene") or list(alternatives.values())[0]
+                primary_state = alternatives.get("candidate_3") or alternatives.get("candidate_1") or list(alternatives.values())[0]
                 summary_data = {
                     "prompt": prompt,
                     "target_duration": target_duration,
                     "model": model_name,
+                    "engine": engine_name,
+                    "creative_profile": creative_profile,
                     "alternatives": {k: v for k, v in alternatives.items()},
                     "storyboard": primary_state.get("storyboard", []),
                     "search_queries": primary_state.get("search_queries", []),
@@ -438,17 +476,23 @@ class JobManager:
                     "agent_telemetry": primary_state.get("agent_telemetry", []),
                 }
             else:
-                final_state = agent.run(
+                final_state = engine.run(
                     prompt=prompt,
                     target_duration=target_duration,
                     retrieval_mode=retrieval_mode,
+                    creative_profile=creative_profile,
                     job_id=job_id,
+                    epic_reference_vector=epic_ref_vec,
+                    scoring_signals=scoring_signals,
+                    scoring_weights=scoring_weights,
                     step_callback=on_step_telemetry,
                 )
                 summary_data = {
                     "prompt": prompt,
                     "target_duration": target_duration,
                     "model": model_name,
+                    "engine": engine_name,
+                    "creative_profile": creative_profile,
                     "storyboard": final_state.get("storyboard", []),
                     "search_queries": final_state.get("search_queries", []),
                     "narrative_arc": final_state.get("narrative_arc", ""),

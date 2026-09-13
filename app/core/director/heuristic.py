@@ -87,7 +87,11 @@ class HeuristicCurator:
             if accumulated_dur >= target_duration:
                 break
 
-            bucket_items = sorted(buckets[bucket_idx], key=lambda c: c.get("score", 0), reverse=True)
+            bucket_items = sorted(
+                buckets[bucket_idx],
+                key=lambda c: c.get("composite_rank") if c.get("composite_rank") is not None else c.get("score", 0),
+                reverse=True,
+            )
 
             for c in bucket_items:
                 fp = c.get("file_path", "")
@@ -117,8 +121,10 @@ class HeuristicCurator:
                     "scene_id": c.get("scene_id"),
                     "retrieval_strategy": c.get("granularity", "frame"),
                     "similarity_score": c.get("score"),
+                    "composite_rank": c.get("composite_rank"),
+                    "scores": c.get("scores", {}),
                     "creation_timestamp": c.get("creation_timestamp"),
-                    "justification": f"Heuristic: best in time bucket {bucket_idx} (score={c.get('score', 0):.3f})",
+                    "justification": f"Heuristic: best in time bucket {bucket_idx} (rank={c.get('composite_rank', c.get('score', 0)):.3f})",
                 })
                 used_paths.add(fp)
                 accumulated_dur += dur
@@ -127,7 +133,10 @@ class HeuristicCurator:
         # Step 6: If still under duration, fill from remaining high-score candidates
         if accumulated_dur < target_duration:
             remaining = [c for c in viable if c.get("file_path", "") not in used_paths]
-            remaining.sort(key=lambda c: c.get("score", 0), reverse=True)
+            remaining.sort(
+                key=lambda c: c.get("composite_rank") if c.get("composite_rank") is not None else c.get("score", 0),
+                reverse=True,
+            )
 
             for c in remaining:
                 if accumulated_dur >= target_duration:
@@ -157,8 +166,10 @@ class HeuristicCurator:
                     "scene_id": c.get("scene_id"),
                     "retrieval_strategy": c.get("granularity", "frame"),
                     "similarity_score": c.get("score"),
+                    "composite_rank": c.get("composite_rank"),
+                    "scores": c.get("scores", {}),
                     "creation_timestamp": c.get("creation_timestamp"),
-                    "justification": f"Heuristic: diversity fill (score={c.get('score', 0):.3f})",
+                    "justification": f"Heuristic: diversity fill (rank={c.get('composite_rank', c.get('score', 0)):.3f})",
                 })
                 used_paths.add(fp)
                 accumulated_dur += dur

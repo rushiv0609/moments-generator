@@ -1,9 +1,30 @@
 """
 State definitions and Pydantic schemas for the LangGraph Director Agent.
+Supports multi-signal scoring, creative profiles, and best-draft watermarking.
 """
 
 from typing import TypedDict, List, Dict, Any, Optional
 from pydantic import BaseModel, Field
+
+
+class QualityScores(TypedDict, total=False):
+    """Extensible quality metrics dictionary."""
+    nima_aesthetic: float
+    sharpness: float
+    colorfulness: float
+    contrast: float
+    technical_composite: float
+    epic_composite: float
+
+
+class CreativeConfig(TypedDict, total=False):
+    """Extensible creative configuration for director curation profiles."""
+    profile_id: str
+    rank_weights: Dict[str, float]
+    segment_duration_bias: str
+    min_segments_factor: float
+    max_clips_per_file: int
+    drafter_emphasis: str
 
 
 class TimelineSegment(BaseModel):
@@ -17,6 +38,8 @@ class TimelineSegment(BaseModel):
     scene_id: Optional[int] = Field(default=None, description="Scene ID if extracted from video")
     retrieval_strategy: str = Field(default="frame", description="'scene' or 'frame'")
     similarity_score: Optional[float] = Field(default=None, description="Embedding match score")
+    composite_rank: Optional[float] = Field(default=None, description="Multi-signal candidate ranking score")
+    scores: Dict[str, float] = Field(default_factory=dict, description="Quality scores (nima, sharpness, etc.)")
     justification: str = Field(default="", description="Director reasoning for choosing this moment")
     creation_timestamp: Optional[float] = Field(default=None, description="Original capture timestamp (Unix epoch) from EXIF/metadata")
 
@@ -43,7 +66,9 @@ class CandidateItem(BaseModel):
     file_path: str
     file_id: Optional[int] = None
     file_type: str  # 'image' | 'video'
-    score: float
+    score: float  # Cosine similarity score
+    composite_rank: Optional[float] = None  # Multi-signal ranking score
+    scores: Dict[str, float] = Field(default_factory=dict)
     source_offset: float = 0.0
     duration_seconds: Optional[float] = None
     granularity: str = "frame"
@@ -52,6 +77,7 @@ class CandidateItem(BaseModel):
     scene_end: Optional[float] = None
     matched_query: str = ""
     creation_timestamp: Optional[float] = None
+    vector: Optional[List[float]] = None
 
 
 class DraftingSegmentChoice(BaseModel):
@@ -59,10 +85,13 @@ class DraftingSegmentChoice(BaseModel):
     file_path: str = Field(description="File path from candidate list")
     start_offset: float = Field(default=0.0, description="Start timestamp in seconds")
     end_offset: float = Field(default=0.0, description="End timestamp in seconds")
-    duration: float = Field(default=3.0, description="Duration in seconds (e.g. 2.0 to 5.0s)")
+    duration: float = Field(default=3.0, description="Duration in seconds (e.g. 2.0 to 6.0s)")
     segment_type: str = Field(default="image", description="'image' or 'video_clip'")
     scene_id: Optional[int] = Field(default=None, description="Scene ID if video candidate")
     retrieval_strategy: str = Field(default="frame", description="'scene' or 'frame'")
+    similarity_score: Optional[float] = Field(default=None, description="Embedding similarity score")
+    composite_rank: Optional[float] = Field(default=None, description="Multi-signal candidate ranking")
+    scores: Dict[str, float] = Field(default_factory=dict, description="Quality scores")
     justification: str = Field(default="", description="Reason for selection and sequencing")
     creation_timestamp: Optional[float] = Field(default=None, description="Original capture timestamp")
 
@@ -88,14 +117,20 @@ class EditorOutput(BaseModel):
         default_factory=list,
         description="Specific adjustment recommendations if rejected",
     )
+    composite_score: float = Field(default=7.0, description="Objective multi-factor composite evaluation score")
 
 
-class DirectorState(TypedDict):
-    """State graph working memory passed between LangGraph nodes."""
-    # User Inputs & Config
+class DirectorState(TypedDict, total=False):
+    """State graph working memory passed between Director Agent nodes."""
+    # User Inputs & Configuration
     user_prompt: str
     target_duration: int
     retrieval_mode: str  # 'scene' | 'frame' | 'dual'
+    creative_profile: str  # 'cinematic' | 'personal' | 'journey'
+    creative_config: Dict[str, Any]
+    epic_reference_vector: Optional[List[float]]
+    scoring_signals: Optional[List[str]]
+    scoring_weights: Optional[Dict[str, float]]
 
     # Internal Working Memory
     search_queries: List[str]
@@ -106,9 +141,11 @@ class DirectorState(TypedDict):
     editor_feedback: List[str]
     narrative_arc: str
 
-    # State Flow Controls
+    # State Flow Controls & Best-Draft Watermarking
     iteration_count: int
     approved: bool
+    best_storyboard: List[Dict[str, Any]]
+    best_composite_score: float
 
     # Metadata & Provenance
     llm_model: str

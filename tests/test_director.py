@@ -235,10 +235,9 @@ def test_director_multi_alternatives(test_env, mock_llm):
         target_duration=20,
     )
 
-    assert "alt_a_scene" in alternatives
-    assert "alt_b_frame" in alternatives
-    assert "alt_c_dual" in alternatives
-    assert "alt_d_heuristic" in alternatives
+    assert "candidate_1" in alternatives
+    assert "candidate_2" in alternatives
+    assert "candidate_3" in alternatives
 
     for key, alt_state in alternatives.items():
         assert alt_state["approved"] is True
@@ -455,3 +454,158 @@ def test_ollama_director_llm_unload(monkeypatch):
     assert len(called_payloads) == 1
     assert called_payloads[0]["model"] == "gemma4:e4b-mlx"
     assert called_payloads[0]["keep_alive"] == 0
+
+
+def test_chronological_sort_and_autofill():
+    """Verify that drafting node enforces chronological order and auto-fills under-duration drafts."""
+    from app.core.director.state import DraftingSegmentChoice, DraftingOutput
+
+    class DummyDraftingLLM(MockDirectorLLM):
+        def structured_generate(self, system_prompt, user_prompt, response_schema):
+            # Output out-of-order and short duration (5.0s vs 20s target)
+            return DraftingOutput(
+                storyboard=[
+                    DraftingSegmentChoice(file_path="/path/day3.jpg", duration=2.5, segment_type="image"),
+                    DraftingSegmentChoice(file_path="/path/day1.jpg", duration=2.5, segment_type="image"),
+                ],
+                narrative_arc="Test journey",
+            )
+
+    llm = DummyDraftingLLM()
+    draft_fn = make_drafting_node(llm)
+
+    state: DirectorState = {
+        "user_prompt": "Mountain trek adventure",
+        "target_duration": 15,
+        "creative_profile": "journey",
+        "retrieved_candidates": [
+            {"file_path": "/path/day3.jpg", "creation_timestamp": 3000, "score": 0.15, "composite_rank": 0.85},
+            {"file_path": "/path/day1.jpg", "creation_timestamp": 1000, "score": 0.14, "composite_rank": 0.80},
+            {"file_path": "/path/day2.jpg", "creation_timestamp": 2000, "score": 0.13, "composite_rank": 0.75},
+            {"file_path": "/path/day4.jpg", "creation_timestamp": 4000, "score": 0.12, "composite_rank": 0.70},
+        ],
+        "storyboard": [],
+    }
+
+    res = draft_fn(state)
+    sb = res["storyboard"]
+    
+    # 1. Verify auto-filled to reach target duration (>= 15s)
+    total_dur = sum(s["duration"] for s in sb)
+    assert total_dur >= 10.0  # Filled from candidates
+
+    # 2. Verify strict chronological sorting
+    timestamps = [s.get("creation_timestamp") or 0 for s in sb]
+    assert timestamps == sorted(timestamps)
+    assert sb[0]["file_path"] == "/path/day1.jpg"
+
+
+def test_best_draft_watermarking():
+    """Verify that editor preserves the highest-scoring draft when an iteration degrades."""
+    class DegradingEditorLLM(MockDirectorLLM):
+        def structured_generate(self, system_prompt, user_prompt, response_schema):
+            return EditorOutput(
+                approved=False,
+                feedback="Needs adjustments",
+                pacing_score=5.0,
+                composite_score=5.0,
+            )
+
+    llm = DegradingEditorLLM()
+    editor_fn = make_editor_node(llm, max_iterations=2)
+
+    # Iteration 1: high scoring draft
+    state: DirectorState = {
+        "user_prompt": "Trek",
+        "target_duration": 10,
+        "iteration_count": 0,
+        "storyboard": [{"file_path": "/p1.jpg", "duration": 5.0, "scores": {"nima_aesthetic": 0.9}}, {"file_path": "/p2.jpg", "duration": 5.0, "scores": {"nima_aesthetic": 0.9}}],
+        "best_storyboard": [],
+        "best_composite_score": 0.0,
+    }
+    res1 = editor_fn(state)
+    assert res1["best_composite_score"] > 6.0
+    best_saved = list(res1["best_storyboard"])
+
+    # Iteration 2: degraded draft
+    state2: DirectorState = {
+        **state,
+        "iteration_count": 1,
+        "storyboard": [{"file_path": "/p_degraded.jpg", "duration": 2.0, "scores": {"nima_aesthetic": 0.1}}],
+        "best_storyboard": best_saved,
+        "best_composite_score": res1["best_composite_score"],
+    }
+    res2 = editor_fn(state2)
+    # Since max_iterations=2 reached, it must approve and revert to best_saved
+    assert res2["approved"] is True
+    assert res2["storyboard"] == best_saved
+
+
+def test_user_configurable_scoring_signals(test_env):
+    """Verify that retrieval dynamically computes composite ranking based on user-selected scoring signals."""
+    embedder = test_env["embedder"]
+    qdrant = test_env["qdrant"]
+    collection_name = test_env["collection_name"]
+
+    retrieval_fn = make_retrieval_node(embedder, qdrant, collection_name)
+
+    # Test 1: Cosine only
+    state_cosine: DirectorState = {
+        "user_prompt": "Hiking trail",
+        "search_queries": ["Hiking trail"],
+        "retrieval_mode": "frame",
+        "creative_profile": "journey",
+        "scoring_signals": ["cosine"],
+        "agent_telemetry": [],
+    }
+    res_cosine = retrieval_fn(state_cosine)
+    telem_cosine = res_cosine["agent_telemetry"][-1]
+    assert telem_cosine["scoring_signals"] == ["cosine"]
+    assert telem_cosine["scoring_weights"] == {"cosine": 1.0}
+
+    # Test 2: Cosine + Sharpness + Contrast (No NIMA)
+    state_tech: DirectorState = {
+        "user_prompt": "Hiking trail",
+        "search_queries": ["Hiking trail"],
+        "retrieval_mode": "frame",
+        "creative_profile": "journey",
+        "scoring_signals": ["cosine", "sharpness", "contrast"],
+        "agent_telemetry": [],
+    }
+    res_tech = retrieval_fn(state_tech)
+    telem_tech = res_tech["agent_telemetry"][-1]
+    assert set(telem_tech["scoring_weights"].keys()) == {"cosine", "sharpness", "contrast"}
+    assert abs(sum(telem_tech["scoring_weights"].values()) - 1.0) < 1e-4
+
+    # Test 3: Default signals when scoring_signals is None
+    state_default: DirectorState = {
+        "user_prompt": "Hiking trail",
+        "search_queries": ["Hiking trail"],
+        "retrieval_mode": "frame",
+        "creative_profile": "journey",
+        "scoring_signals": None,
+        "agent_telemetry": [],
+    }
+    res_default = retrieval_fn(state_default)
+    telem_default = res_default["agent_telemetry"][-1]
+    assert "nima" in telem_default["scoring_weights"]
+    assert abs(sum(telem_default["scoring_weights"].values()) - 1.0) < 1e-4
+
+    # Test 4: Custom explicit weights (e.g. POC 45/45/10)
+    state_custom: DirectorState = {
+        "user_prompt": "Hiking trail",
+        "search_queries": ["Hiking trail"],
+        "retrieval_mode": "frame",
+        "creative_profile": "journey",
+        "scoring_weights": {"cosine": 0.45, "nima": 0.45, "technical": 0.10},
+        "agent_telemetry": [],
+    }
+    res_custom = retrieval_fn(state_custom)
+    telem_custom = res_custom["agent_telemetry"][-1]
+    assert telem_custom["scoring_weights"]["cosine"] == 0.45
+    assert telem_custom["scoring_weights"]["nima"] == 0.45
+    assert telem_custom["scoring_weights"]["technical"] == 0.10
+    assert abs(sum(telem_custom["scoring_weights"].values()) - 1.0) < 1e-4
+
+
+

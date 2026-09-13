@@ -119,7 +119,31 @@ class GenerateRequest(BaseModel):
     model_name: str = Field(default="gemma4:e4b-mlx", description="Model name (Ollama tag, gemini-*, or groq:*)")
     api_key: Optional[str] = Field(default=None, description="Optional custom runtime API key for cloud providers")
     retrieval_mode: str = Field(default="dual", description="'scene' | 'frame' | 'dual' | 'all_alternatives'")
-    generate_alternatives: bool = Field(default=True, description="Generate Alt-A, Alt-B, Alt-C in parallel")
+    creative_profile: str = Field(default="journey", description="'cinematic' | 'personal' | 'journey'")
+    engine: str = Field(default="langgraph", description="'langgraph' (production) or 'pydantic' (pure python state machine)")
+    epic_reference_files: Optional[List[str]] = Field(default=None, description="Optional file paths of user-selected epic reference images")
+    generate_alternatives: bool = Field(default=True, description="Generate Candidate 1, 2, 3 in parallel")
+    scoring_signals: Optional[List[str]] = Field(
+        default_factory=lambda: ["cosine", "nima", "technical"],
+        description="Active scoring signals for composite rank (e.g. cosine, nima, sharpness, contrast, colorfulness, epic_sim, technical)",
+    )
+    scoring_weights: Optional[Dict[str, float]] = Field(
+        default=None,
+        description="Custom normalized or raw weights for scoring signals (e.g. {'cosine': 0.45, 'nima': 0.45, 'technical': 0.10})",
+    )
+
+
+class SetEpicReferencesRequest(BaseModel):
+    workspace_path: Optional[str] = Field(default=None, description="Target workspace path")
+    file_paths: List[str] = Field(..., description="List of media file paths to compute reference vector from")
+
+
+class EpicReferencesResponse(BaseModel):
+    workspace_dir: str
+    active: bool
+    reference_count: int
+    files: List[str]
+    message: str
 
 
 class DirectorModelItem(BaseModel):
@@ -198,6 +222,17 @@ class WorkspaceSearchResponse(BaseModel):
     workspace_dir: str
     total_results: int
     results: List[WorkspaceSearchResultItem]
+
+
+class RankingSearchResultItem(WorkspaceSearchResultItem):
+    scores: Dict[str, float] = Field(default_factory=dict, description="Component quality scores (nima, sharpness, contrast, etc.)")
+
+
+class RankingSearchResponse(BaseModel):
+    query: str
+    workspace_dir: str
+    total_results: int
+    results: List[RankingSearchResultItem]
 
 
 class RenderVideoRequest(BaseModel):

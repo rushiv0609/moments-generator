@@ -5,6 +5,7 @@
 document.addEventListener("DOMContentLoaded", () => {
     initTabs();
     initPlayground();
+    initRankingPlayground();
     initWorkspace();
     initMediaExplorer();
     initDirectorStudio();
@@ -1548,7 +1549,7 @@ function initMediaExplorer() {
 // =========================================================================
 
 let currentDirectorJobData = null;
-let activeAlternativeKey = "alt_c_dual";
+let activeAlternativeKey = "candidate_3";
 let directorTimerInterval = null;
 
 function initDirectorStudio() {
@@ -1574,6 +1575,140 @@ function initDirectorStudio() {
             runDirectorAgent();
         });
     }
+
+    // Initialize Candidate Ranking Sliders in Director Studio
+    const directorSliders = {
+        cosine: document.getElementById("sliderDirectorCosine"),
+        nima: document.getElementById("sliderDirectorNima"),
+        technical: document.getElementById("sliderDirectorTechnical"),
+        sharpness: document.getElementById("sliderDirectorSharpness"),
+        contrast: document.getElementById("sliderDirectorContrast"),
+        colorfulness: document.getElementById("sliderDirectorColorfulness"),
+    };
+
+    const directorDisplays = {
+        raw: {
+            cosine: document.getElementById("valRawDirectorCosine"),
+            nima: document.getElementById("valRawDirectorNima"),
+            technical: document.getElementById("valRawDirectorTechnical"),
+            sharpness: document.getElementById("valRawDirectorSharpness"),
+            contrast: document.getElementById("valRawDirectorContrast"),
+            colorfulness: document.getElementById("valRawDirectorColorfulness"),
+        },
+        norm: {
+            cosine: document.getElementById("valNormDirectorCosine"),
+            nima: document.getElementById("valNormDirectorNima"),
+            technical: document.getElementById("valNormDirectorTechnical"),
+            sharpness: document.getElementById("valNormDirectorSharpness"),
+            contrast: document.getElementById("valNormDirectorContrast"),
+            colorfulness: document.getElementById("valNormDirectorColorfulness"),
+        },
+        dist: {
+            cosine: document.getElementById("distDirectorCosine"),
+            nima: document.getElementById("distDirectorNima"),
+            technical: document.getElementById("distDirectorTechnical"),
+            sharpness: document.getElementById("distDirectorSharpness"),
+            contrast: document.getElementById("distDirectorContrast"),
+            colorfulness: document.getElementById("distDirectorColorfulness"),
+        },
+    };
+
+    function computeDirectorNormalizedWeights() {
+        const raw = {
+            cosine: parseFloat(directorSliders.cosine ? directorSliders.cosine.value : 0.45) || 0,
+            nima: parseFloat(directorSliders.nima ? directorSliders.nima.value : 0.45) || 0,
+            technical: parseFloat(directorSliders.technical ? directorSliders.technical.value : 0.10) || 0,
+            sharpness: parseFloat(directorSliders.sharpness ? directorSliders.sharpness.value : 0) || 0,
+            contrast: parseFloat(directorSliders.contrast ? directorSliders.contrast.value : 0) || 0,
+            colorfulness: parseFloat(directorSliders.colorfulness ? directorSliders.colorfulness.value : 0) || 0,
+        };
+
+        const total = raw.cosine + raw.nima + raw.technical + raw.sharpness + raw.contrast + raw.colorfulness;
+        const norm = {};
+
+        if (total > 0) {
+            norm.cosine = raw.cosine / total;
+            norm.nima = raw.nima / total;
+            norm.technical = raw.technical / total;
+            norm.sharpness = raw.sharpness / total;
+            norm.contrast = raw.contrast / total;
+            norm.colorfulness = raw.colorfulness / total;
+        } else {
+            norm.cosine = 0.45;
+            norm.nima = 0.45;
+            norm.technical = 0.10;
+            norm.sharpness = 0;
+            norm.contrast = 0;
+            norm.colorfulness = 0;
+        }
+
+        Object.keys(raw).forEach(key => {
+            if (directorDisplays.raw[key]) {
+                directorDisplays.raw[key].textContent = raw[key].toFixed(raw[key] < 0.1 && raw[key] > 0 ? 3 : 2);
+            }
+            const pct = Math.round(norm[key] * 100);
+            if (directorDisplays.norm[key]) {
+                directorDisplays.norm[key].textContent = `(${pct}%)`;
+            }
+            if (directorDisplays.dist[key]) {
+                directorDisplays.dist[key].style.width = `${pct}%`;
+            }
+        });
+
+        const activeParts = [];
+        const labelMap = {
+            cosine: "Cosine",
+            nima: "NIMA",
+            technical: "Tech Composite",
+            sharpness: "Sharpness",
+            contrast: "Contrast",
+            colorfulness: "Colorfulness",
+        };
+        Object.keys(norm).forEach(k => {
+            const pct = Math.round(norm[k] * 100);
+            if (pct > 0) {
+                activeParts.push(`${pct}% ${labelMap[k]}`);
+            }
+        });
+
+        const activeCountEl = document.getElementById("directorActiveSignalsCount");
+        if (activeCountEl) {
+            activeCountEl.textContent = `${activeParts.length} Signals Active`;
+        }
+        const summaryEl = document.getElementById("directorWeightDistributionSummary");
+        if (summaryEl) {
+            summaryEl.textContent = `Active Strategy: ${activeParts.join(" + ")}`;
+        }
+
+        return { raw, norm };
+    }
+
+    Object.values(directorSliders).forEach(slider => {
+        if (slider) {
+            slider.addEventListener("input", computeDirectorNormalizedWeights);
+        }
+    });
+
+    const btnResetDirectorWeights = document.getElementById("btnResetDirectorWeights");
+    if (btnResetDirectorWeights) {
+        btnResetDirectorWeights.addEventListener("click", () => {
+            if (directorSliders.cosine) directorSliders.cosine.value = "0.45";
+            if (directorSliders.nima) directorSliders.nima.value = "0.45";
+            if (directorSliders.technical) directorSliders.technical.value = "0.10";
+            if (directorSliders.sharpness) directorSliders.sharpness.value = "0.00";
+            if (directorSliders.contrast) directorSliders.contrast.value = "0.00";
+            if (directorSliders.colorfulness) directorSliders.colorfulness.value = "0.00";
+            computeDirectorNormalizedWeights();
+        });
+    }
+
+    // Initial calculation
+    computeDirectorNormalizedWeights();
+
+    window.getDirectorRankingWeights = () => {
+        const { norm } = computeDirectorNormalizedWeights();
+        return norm;
+    };
 
     // Alternative Switcher Buttons
     document.querySelectorAll(".alt-btn").forEach(btn => {
@@ -1778,8 +1913,9 @@ async function runDirectorAgent() {
     }
 
     const duration = parseInt(document.getElementById("directorDuration")?.value || "30", 10);
+    const profile = document.getElementById("directorProfile")?.value || "journey";
+    const engine = document.getElementById("directorEngine")?.value || "langgraph";
     const model = document.getElementById("directorModelSelect")?.value || "gemma4:e4b-mlx";
-    const mode = document.getElementById("directorRetrievalMode")?.value || "dual";
     const aspectRatio = document.getElementById("directorAspectRatio")?.value || "1:1";
 
     // Determine if custom API key is available
@@ -1816,13 +1952,28 @@ async function runDirectorAgent() {
     }, 100);
 
     try {
+        const directorWeights = window.getDirectorRankingWeights ? window.getDirectorRankingWeights() : {
+            cosine: 0.45,
+            nima: 0.45,
+            technical: 0.10,
+            sharpness: 0.0,
+            contrast: 0.0,
+            colorfulness: 0.0,
+        };
+
+        const activeSignals = Object.keys(directorWeights).filter(k => directorWeights[k] > 0.001);
+
         const payload = {
             prompt: prompt,
             target_duration_seconds: duration,
             aspect_ratio: aspectRatio,
             model_name: model,
-            retrieval_mode: mode,
+            creative_profile: "journey",
+            engine: engine,
+            retrieval_mode: "dual",
             generate_alternatives: true,
+            scoring_signals: activeSignals.length > 0 ? activeSignals : ["cosine", "nima", "technical"],
+            scoring_weights: directorWeights,
         };
         if (apiKey) {
             payload.api_key = apiKey;
@@ -2166,7 +2317,7 @@ function renderDirectorResults(data) {
     }
 
     // Default display Alternative C
-    activeAlternativeKey = (data.alternatives && data.alternatives["alt_c_dual"]) ? "alt_c_dual" : "alt_a_scene";
+    activeAlternativeKey = (data.alternatives && data.alternatives["candidate_3"]) ? "candidate_3" : "candidate_1";
     switchAlternativeView(activeAlternativeKey);
 }
 
@@ -2839,6 +2990,681 @@ async function renderActiveStoryboardVideo() {
         }
     }
 }
+
+/**
+ * ==========================================================================
+ * Ranking Playground Controller
+ * Interactive POC environment for candidate scoring and re-ranking
+ * ==========================================================================
+ */
+function initRankingPlayground() {
+    // State
+    let _rawCandidates = [];
+    let _rankedCandidates = [];
+    let _pinnedExperiments = [];
+    let _pinnedCounter = 1;
+
+    // Elements
+    const queryInput = document.getElementById("rankingQueryInput");
+    const topKSelect = document.getElementById("rankingTopK");
+    const granularitySelect = document.getElementById("rankingGranularity");
+    const fileTypeSelect = document.getElementById("rankingFileType");
+    const btnFetch = document.getElementById("btnFetchRankingCandidates");
+    const statusBadge = document.getElementById("rankingStatusBadge");
+    const experimentTitleInput = document.getElementById("rankingExperimentName");
+    const btnReRank = document.getElementById("btnReRankNow");
+    const btnPin = document.getElementById("btnPinExperiment");
+    const btnResetWeights = document.getElementById("btnResetRankingWeights");
+    const filterInput = document.getElementById("rankingSearchFilter");
+    const sortSelect = document.getElementById("rankingSortMode");
+
+    const emptyState = document.getElementById("rankingEmptyState");
+    const grid = document.getElementById("rankingResultsGrid");
+    const resultsTitle = document.getElementById("rankingResultsTitle");
+    const countBadge = document.getElementById("rankingCandidatesCountBadge");
+    const summaryFormula = document.getElementById("rankingStrategySummary");
+    const pinnedSection = document.getElementById("rankingPinnedSection");
+    const pinnedContainer = document.getElementById("rankingPinnedContainer");
+    const pinnedCountBadge = document.getElementById("pinnedCountBadge");
+    const btnClearPinned = document.getElementById("btnClearAllPinned");
+
+    // Slider inputs
+    const sliders = {
+        cosine: document.getElementById("sliderCosine"),
+        nima: document.getElementById("sliderNima"),
+        sharpness: document.getElementById("sliderSharpness"),
+        contrast: document.getElementById("sliderContrast"),
+        colorfulness: document.getElementById("sliderColorfulness"),
+        technical: document.getElementById("sliderTechnical"),
+    };
+
+    // Value display elements
+    const displays = {
+        raw: {
+            cosine: document.getElementById("valRawCosine"),
+            nima: document.getElementById("valRawNima"),
+            sharpness: document.getElementById("valRawSharpness"),
+            contrast: document.getElementById("valRawContrast"),
+            colorfulness: document.getElementById("valRawColorfulness"),
+            technical: document.getElementById("valRawTechnical"),
+        },
+        norm: {
+            cosine: document.getElementById("valNormCosine"),
+            nima: document.getElementById("valNormNima"),
+            sharpness: document.getElementById("valNormSharpness"),
+            contrast: document.getElementById("valNormContrast"),
+            colorfulness: document.getElementById("valNormColorfulness"),
+            technical: document.getElementById("valNormTechnical"),
+        },
+        dist: {
+            cosine: document.getElementById("distCosine"),
+            nima: document.getElementById("distNima"),
+            sharpness: document.getElementById("distSharpness"),
+            contrast: document.getElementById("distContrast"),
+            colorfulness: document.getElementById("distColorfulness"),
+            technical: document.getElementById("distTechnical"),
+        }
+    };
+
+    // Profiles / Presets dictionary (Quick-fills default weights, 100% editable afterwards)
+    const PRESETS = {
+        cinematic: {
+            title: "Cinematic Epic",
+            weights: { cosine: 0.40, nima: 0.30, sharpness: 0.05, contrast: 0.035, colorfulness: 0.015, technical: 0.10 }
+        },
+        personal: {
+            title: "Personal Moments",
+            weights: { cosine: 0.50, nima: 0.15, sharpness: 0.125, contrast: 0.087, colorfulness: 0.037, technical: 0.25 }
+        },
+        journey: {
+            title: "Balanced Journey",
+            weights: { cosine: 0.50, nima: 0.20, sharpness: 0.075, contrast: 0.052, colorfulness: 0.022, technical: 0.15 }
+        },
+        cosine_only: {
+            title: "Pure Semantic Cosine",
+            weights: { cosine: 1.0, nima: 0.0, sharpness: 0.0, contrast: 0.0, colorfulness: 0.0, technical: 0.0 }
+        },
+        aesthetic_heavy: {
+            title: "Aesthetic Priority",
+            weights: { cosine: 0.30, nima: 0.50, sharpness: 0.05, contrast: 0.05, colorfulness: 0.0, technical: 0.10 }
+        },
+        clarity: {
+            title: "High Clarity & Contrast",
+            weights: { cosine: 0.30, nima: 0.10, sharpness: 0.35, contrast: 0.15, colorfulness: 0.0, technical: 0.10 }
+        }
+    };
+
+    /**
+     * Compute normalized weights from sliders and update UI displays
+     */
+    function computeNormalizedWeights() {
+        const raw = {
+            cosine: parseFloat(sliders.cosine ? sliders.cosine.value : 0.4) || 0,
+            nima: parseFloat(sliders.nima ? sliders.nima.value : 0.3) || 0,
+            sharpness: parseFloat(sliders.sharpness ? sliders.sharpness.value : 0.05) || 0,
+            contrast: parseFloat(sliders.contrast ? sliders.contrast.value : 0.035) || 0,
+            colorfulness: parseFloat(sliders.colorfulness ? sliders.colorfulness.value : 0.015) || 0,
+            technical: parseFloat(sliders.technical ? sliders.technical.value : 0.1) || 0,
+        };
+
+        const total = raw.cosine + raw.nima + raw.sharpness + raw.contrast + raw.colorfulness + raw.technical;
+        const norm = {};
+
+        if (total > 0) {
+            norm.cosine = raw.cosine / total;
+            norm.nima = raw.nima / total;
+            norm.sharpness = raw.sharpness / total;
+            norm.contrast = raw.contrast / total;
+            norm.colorfulness = raw.colorfulness / total;
+            norm.technical = raw.technical / total;
+        } else {
+            norm.cosine = 1.0;
+            norm.nima = 0.0;
+            norm.sharpness = 0.0;
+            norm.contrast = 0.0;
+            norm.colorfulness = 0.0;
+            norm.technical = 0.0;
+        }
+
+        // Update display text and distribution bars
+        Object.keys(raw).forEach(key => {
+            if (displays.raw[key]) {
+                displays.raw[key].textContent = raw[key].toFixed(raw[key] < 0.1 && raw[key] > 0 ? 3 : 2);
+            }
+            const pct = Math.round(norm[key] * 100);
+            if (displays.norm[key]) {
+                displays.norm[key].textContent = `(${pct}%)`;
+            }
+            if (displays.dist[key]) {
+                displays.dist[key].style.width = `${pct}%`;
+            }
+        });
+
+        // Count active signals (> 0.001)
+        const activeCount = Object.values(norm).filter(v => v > 0.005).length;
+        const activeCountEl = document.getElementById("rankingActiveSignalsCount");
+        if (activeCountEl) {
+            activeCountEl.textContent = `${activeCount} Signals Active`;
+        }
+
+        // Build formula summary string
+        const parts = [];
+        if (norm.cosine > 0.005) parts.push(`${Math.round(norm.cosine * 100)}% Cosine`);
+        if (norm.nima > 0.005) parts.push(`${Math.round(norm.nima * 100)}% NIMA`);
+        if (norm.sharpness > 0.005) parts.push(`${Math.round(norm.sharpness * 100)}% Sharp`);
+        if (norm.contrast > 0.005) parts.push(`${Math.round(norm.contrast * 100)}% Contrast`);
+        if (norm.colorfulness > 0.005) parts.push(`${Math.round(norm.colorfulness * 100)}% Color`);
+        if (norm.technical > 0.005) parts.push(`${Math.round(norm.technical * 100)}% Tech`);
+
+        if (summaryFormula) {
+            summaryFormula.textContent = parts.length > 0 ? `Formula: ${parts.join(" + ")}` : "Formula: Pure Cosine";
+        }
+
+        return { raw, norm, total };
+    }
+
+    /**
+     * Apply preset weights to sliders (flexible: quick-fills defaults, user can customize freely)
+     */
+    function applyPreset(presetKey) {
+        const preset = PRESETS[presetKey];
+        if (!preset) return;
+
+        Object.keys(preset.weights).forEach(k => {
+            if (sliders[k]) {
+                sliders[k].value = preset.weights[k];
+            }
+        });
+
+        if (experimentTitleInput) {
+            experimentTitleInput.value = `POC ${_pinnedCounter}: ${preset.title}`;
+        }
+
+        // Highlight active preset button
+        document.querySelectorAll(".ranking-preset-group .btn-preset").forEach(btn => {
+            btn.classList.toggle("active", btn.getAttribute("data-preset") === presetKey);
+        });
+
+        computeNormalizedWeights();
+
+        // If candidates are already present, auto re-rank
+        if (_rawCandidates.length > 0) {
+            executeReRank();
+        }
+    }
+
+    /**
+     * Fetch candidates from server using embedding search + all quality scores
+     */
+    async function fetchCandidates() {
+        const query = (queryInput ? queryInput.value : "").trim();
+        if (!query) {
+            if (queryInput) queryInput.focus();
+            return;
+        }
+
+        const topK = topKSelect ? topKSelect.value : 50;
+        const granularity = granularitySelect ? granularitySelect.value : "all";
+        const fileType = fileTypeSelect ? fileTypeSelect.value : "all";
+
+        if (btnFetch) {
+            btnFetch.disabled = true;
+            btnFetch.innerHTML = `<span class="spinner" style="width: 14px; height: 14px; border: 2px solid #fff; border-top-color: transparent; border-radius: 50%; display: inline-block; animation: spin 0.8s linear infinite;"></span> <span>Fetching...</span>`;
+        }
+        if (statusBadge) {
+            statusBadge.className = "badge badge-accent";
+            statusBadge.textContent = "Retrieving Candidates...";
+        }
+
+        const startTime = performance.now();
+
+        try {
+            const params = new URLSearchParams({
+                query: query,
+                top_k: topK,
+                granularity: granularity,
+                file_type: fileType,
+            });
+
+            const res = await fetch(`/api/v1/workspace/search/ranked?${params.toString()}`);
+            if (!res.ok) {
+                const err = await res.json();
+                throw new Error(err.detail || `HTTP ${res.status}`);
+            }
+
+            const data = await res.json();
+            const elapsed = Math.round(performance.now() - startTime);
+
+            _rawCandidates = data.results || [];
+
+            if (statusBadge) {
+                statusBadge.className = "badge badge-success";
+                statusBadge.textContent = `Retrieved ${_rawCandidates.length} in ${elapsed}ms`;
+            }
+
+            // Immediately run re-ranking
+            executeReRank();
+
+        } catch (err) {
+            console.error("Failed to fetch ranking candidates:", err);
+            if (statusBadge) {
+                statusBadge.className = "badge badge-danger";
+                statusBadge.textContent = "Fetch Failed";
+            }
+            if (emptyState) {
+                emptyState.style.display = "block";
+                emptyState.innerHTML = `
+                    <div style="font-size: 36px; margin-bottom: 8px;">⚠️</div>
+                    <h4 style="color: #ef4444;">Search Retrieval Failed</h4>
+                    <p style="font-size: 13px; color: var(--text-muted); margin-top: 4px;">${err.message}</p>
+                `;
+            }
+            if (grid) grid.style.display = "none";
+        } finally {
+            if (btnFetch) {
+                btnFetch.disabled = false;
+                btnFetch.innerHTML = `⚡ Fetch Candidates`;
+            }
+        }
+    }
+
+    /**
+     * Pure client-side composite score computation and re-ranking
+     */
+    function executeReRank() {
+        if (!_rawCandidates || _rawCandidates.length === 0) {
+            if (emptyState) emptyState.style.display = "block";
+            if (grid) grid.style.display = "none";
+            return;
+        }
+
+        const { norm } = computeNormalizedWeights();
+
+        // Recompute composite rank for every candidate
+        _rankedCandidates = _rawCandidates.map(c => {
+            const scores = c.scores || {};
+
+            // Normalize raw SigLIP2 cosine similarity (~0.05 to 0.25) to [0.0, 1.0]
+            const rawScore = c.score || 0.0;
+            const cosNorm = Math.min(Math.max((rawScore - 0.05) / 0.20, 0.0), 1.0);
+
+            const nimaVal = typeof scores.nima_aesthetic === "number" ? scores.nima_aesthetic : 0.5;
+            const sharpVal = typeof scores.sharpness === "number" ? scores.sharpness : 0.5;
+            const contVal = typeof scores.contrast === "number" ? scores.contrast : 0.5;
+            const colorVal = typeof scores.colorfulness === "number" ? scores.colorfulness : 0.5;
+            const techVal = typeof scores.technical_composite === "number" ? scores.technical_composite : 0.5;
+
+            const compositeScore = (
+                (norm.cosine * cosNorm) +
+                (norm.nima * nimaVal) +
+                (norm.sharpness * sharpVal) +
+                (norm.contrast * contVal) +
+                (norm.colorfulness * colorVal) +
+                (norm.technical * techVal)
+            );
+
+            return {
+                ...c,
+                composite_rank: Math.round(compositeScore * 10000) / 10000,
+                cos_norm: Math.round(cosNorm * 1000) / 1000,
+                nima_val: Math.round(nimaVal * 1000) / 1000,
+                sharp_val: Math.round(sharpVal * 1000) / 1000,
+                cont_val: Math.round(contVal * 1000) / 1000,
+                color_val: Math.round(colorVal * 1000) / 1000,
+                tech_val: Math.round(techVal * 1000) / 1000,
+            };
+        });
+
+        // Apply selected sort
+        const sortMode = sortSelect ? sortSelect.value : "composite_desc";
+        _rankedCandidates.sort((a, b) => {
+            switch (sortMode) {
+                case "cosine_desc": return b.score - a.score;
+                case "nima_desc": return b.nima_val - a.nima_val;
+                case "sharpness_desc": return b.sharp_val - a.sharp_val;
+                case "contrast_desc": return b.cont_val - a.cont_val;
+                case "colorfulness_desc": return b.color_val - a.color_val;
+                case "technical_desc": return b.tech_val - a.tech_val;
+                case "composite_desc":
+                default:
+                    return (b.composite_rank ?? b.score) - (a.composite_rank ?? a.score);
+            }
+        });
+
+        renderGrid();
+    }
+
+    /**
+     * Render the ranked candidate cards
+     */
+    function renderGrid() {
+        if (!grid || !emptyState) return;
+
+        const filterText = (filterInput ? filterInput.value : "").trim().toLowerCase();
+        const displayItems = filterText
+            ? _rankedCandidates.filter(c => (c.file_name || "").toLowerCase().includes(filterText))
+            : _rankedCandidates;
+
+        if (displayItems.length === 0) {
+            emptyState.style.display = "block";
+            grid.style.display = "none";
+            emptyState.innerHTML = `
+                <div style="font-size: 36px; margin-bottom: 8px;">🔍</div>
+                <h4>No Matching Candidates</h4>
+                <p style="font-size: 13px; color: var(--text-muted); margin-top: 4px;">
+                    ${filterText ? `No candidates match filter "${filterText}"` : "Try fetching with a different query."}
+                </p>
+            `;
+            if (countBadge) countBadge.textContent = "0 items";
+            return;
+        }
+
+        emptyState.style.display = "none";
+        grid.style.display = "grid";
+        grid.innerHTML = "";
+
+        if (countBadge) {
+            countBadge.textContent = `${displayItems.length} candidates`;
+        }
+        if (resultsTitle) {
+            const expName = experimentTitleInput ? experimentTitleInput.value : "Experiment";
+            resultsTitle.textContent = `Ranked Candidates (${expName})`;
+        }
+
+        displayItems.forEach((c, idx) => {
+            const card = document.createElement("div");
+            card.className = "ranking-card";
+
+            const isVideo = c.file_type === "video";
+            const offsetSec = c.source_offset ?? (c.scene_start ?? 0.0);
+            let typeLabel = "Photo";
+            if (isVideo) {
+                typeLabel = c.granularity === "scene"
+                    ? `Scene #${c.scene_id ?? 0}`
+                    : `Video @ ${offsetSec.toFixed(1)}s`;
+            }
+
+            // Top rank badge styling
+            let rankClass = "";
+            if (idx === 0) rankClass = "top-1";
+            else if (idx === 1) rankClass = "top-2";
+            else if (idx === 2) rankClass = "top-3";
+
+            // Bar colors
+            const getScoreColor = (val) => {
+                if (val >= 0.70) return "#10b981";
+                if (val >= 0.40) return "#6366f1";
+                return "#f59e0b";
+            };
+
+            const thumbSrc = c.thumbnail_url || c.media_url;
+
+            card.innerHTML = `
+                <div class="ranking-thumb-wrap">
+                    <img src="${thumbSrc}" class="ranking-thumb" loading="lazy" alt="${c.file_name}"
+                         onerror="this.src='data:image/svg+xml;utf8,<svg xmlns=\\'http://www.w3.org/2000/svg\\' width=\\'100\\' height=\\'100\\' fill=\\'%23111827\\'><rect width=\\'100\\' height=\\'100\\'/><text x=\\'50%\\' y=\\'50%\\' dominant-baseline=\\'middle\\' text-anchor=\\'middle\\' fill=\\'%236b7280\\' font-size=\\'12\\'>No Preview</text></svg>'">
+                    <span class="ranking-rank-badge ${rankClass}">#${idx + 1}</span>
+                    <span class="ranking-composite-badge" title="Composite Re-Rank Score">⭐ ${(c.composite_rank || 0).toFixed(3)}</span>
+                    ${isVideo ? `<div style="position: absolute; width: 32px; height: 32px; background: rgba(0,0,0,0.65); border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 14px; color: #fff; pointer-events: none; border: 1px solid rgba(255,255,255,0.3); top: 50%; left: 50%; transform: translate(-50%, -50%);">▶️</div>` : ""}
+                </div>
+                <div class="ranking-card-body">
+                    <div class="ranking-file-name" title="${c.file_path}">${c.file_name}</div>
+                    <div class="ranking-meta-row">
+                        <span>${typeLabel}</span>
+                        <span style="font-family: var(--font-mono); font-size: 10px; color: #818cf8;">Raw SigLIP: ${c.score > 0 ? "+" : ""}${c.score.toFixed(3)}</span>
+                    </div>
+
+                    <!-- Quality Signals Mini Breakdown -->
+                    <div class="ranking-score-bars">
+                        <div class="ranking-bar-row">
+                            <span class="ranking-bar-label">Cosine</span>
+                            <div class="ranking-bar-track">
+                                <div class="ranking-bar-fill" style="width: ${c.cos_norm * 100}%; background: #6366f1;"></div>
+                            </div>
+                            <span class="ranking-bar-val">${c.cos_norm.toFixed(2)}</span>
+                        </div>
+                        <div class="ranking-bar-row">
+                            <span class="ranking-bar-label">NIMA</span>
+                            <div class="ranking-bar-track">
+                                <div class="ranking-bar-fill" style="width: ${c.nima_val * 100}%; background: ${getScoreColor(c.nima_val)};"></div>
+                            </div>
+                            <span class="ranking-bar-val">${c.nima_val.toFixed(2)}</span>
+                        </div>
+                        <div class="ranking-bar-row">
+                            <span class="ranking-bar-label">Sharpness</span>
+                            <div class="ranking-bar-track">
+                                <div class="ranking-bar-fill" style="width: ${c.sharp_val * 100}%; background: ${getScoreColor(c.sharp_val)};"></div>
+                            </div>
+                            <span class="ranking-bar-val">${c.sharp_val.toFixed(2)}</span>
+                        </div>
+                        <div class="ranking-bar-row">
+                            <span class="ranking-bar-label">Contrast</span>
+                            <div class="ranking-bar-track">
+                                <div class="ranking-bar-fill" style="width: ${c.cont_val * 100}%; background: ${getScoreColor(c.cont_val)};"></div>
+                            </div>
+                            <span class="ranking-bar-val">${c.cont_val.toFixed(2)}</span>
+                        </div>
+                        <div class="ranking-bar-row">
+                            <span class="ranking-bar-label">Color</span>
+                            <div class="ranking-bar-track">
+                                <div class="ranking-bar-fill" style="width: ${c.color_val * 100}%; background: #ec4899;"></div>
+                            </div>
+                            <span class="ranking-bar-val">${c.color_val.toFixed(2)}</span>
+                        </div>
+                        <div class="ranking-bar-row">
+                            <span class="ranking-bar-label">Tech Comp</span>
+                            <div class="ranking-bar-track">
+                                <div class="ranking-bar-fill" style="width: ${c.tech_val * 100}%; background: #8b5cf6;"></div>
+                            </div>
+                            <span class="ranking-bar-val">${c.tech_val.toFixed(2)}</span>
+                        </div>
+                    </div>
+                </div>
+            `;
+
+            // Clicking thumbnail opens modal / media viewer
+            const thumbWrap = card.querySelector(".ranking-thumb-wrap");
+            if (thumbWrap) {
+                thumbWrap.addEventListener("click", () => {
+                    if (isVideo && typeof openVideoPlayerModal === "function") {
+                        openVideoPlayerModal(c);
+                    } else {
+                        window.open(c.media_url, "_blank");
+                    }
+                });
+            }
+
+            grid.appendChild(card);
+        });
+    }
+
+    /**
+     * Pin the current experiment ranking strategy for side-by-side comparison
+     */
+    function pinCurrentExperiment() {
+        if (!_rankedCandidates || _rankedCandidates.length === 0) {
+            alert("Please fetch candidates and compute a ranking before pinning.");
+            return;
+        }
+
+        const { norm } = computeNormalizedWeights();
+        const title = (experimentTitleInput && experimentTitleInput.value.trim()) || `Strategy ${_pinnedCounter}`;
+        const formula = summaryFormula ? summaryFormula.textContent.replace("Formula: ", "") : "";
+
+        // Clone top 10 items for the comparison lane
+        const topItems = _rankedCandidates.slice(0, 10).map((c, i) => ({
+            rank: i + 1,
+            file_name: c.file_name,
+            file_type: c.file_type,
+            thumbnail_url: c.thumbnail_url || c.media_url,
+            composite_rank: c.composite_rank,
+            score: c.score,
+        }));
+
+        const expId = `exp_${Date.now()}`;
+        _pinnedExperiments.push({
+            id: expId,
+            title: title,
+            formula: formula,
+            norm: norm,
+            topItems: topItems,
+        });
+
+        _pinnedCounter++;
+        if (experimentTitleInput) {
+            experimentTitleInput.value = `POC ${_pinnedCounter}: Strategy`;
+        }
+
+        renderPinnedLanes();
+    }
+
+    /**
+     * Render pinned comparison lanes
+     */
+    function renderPinnedLanes() {
+        if (!pinnedSection || !pinnedContainer) return;
+
+        if (_pinnedExperiments.length === 0) {
+            pinnedSection.style.display = "none";
+            return;
+        }
+
+        pinnedSection.style.display = "block";
+        if (pinnedCountBadge) {
+            pinnedCountBadge.textContent = `${_pinnedExperiments.length} pinned`;
+        }
+
+        pinnedContainer.innerHTML = "";
+
+        _pinnedExperiments.forEach((exp, expIdx) => {
+            const lane = document.createElement("div");
+            lane.className = "pinned-lane-card";
+
+            lane.innerHTML = `
+                <div class="pinned-lane-header">
+                    <div class="pinned-lane-title">
+                        <span>📌 Experiment ${expIdx + 1}: ${exp.title}</span>
+                    </div>
+                    <div class="pinned-lane-formula">${exp.formula}</div>
+                    <button type="button" class="btn-clear-preview btn-remove-pinned" data-id="${exp.id}" title="Remove this experiment" style="position: static; font-size: 11px; padding: 2px 6px;">✕</button>
+                </div>
+                <div class="pinned-lane-strip">
+                    ${exp.topItems.map(item => `
+                        <div class="pinned-strip-item">
+                            <img src="${item.thumbnail_url}" class="pinned-strip-thumb" loading="lazy" alt="${item.file_name}">
+                            <div class="pinned-strip-body">
+                                <div>
+                                    <span class="pinned-strip-rank">#${item.rank}</span>
+                                    <span class="pinned-strip-score">${item.composite_rank.toFixed(3)}</span>
+                                </div>
+                                <div class="pinned-strip-name" title="${item.file_name}">${item.file_name}</div>
+                            </div>
+                        </div>
+                    `).join("")}
+                </div>
+            `;
+
+            // Remove button
+            const btnRemove = lane.querySelector(".btn-remove-pinned");
+            if (btnRemove) {
+                btnRemove.addEventListener("click", () => {
+                    _pinnedExperiments = _pinnedExperiments.filter(e => e.id !== exp.id);
+                    renderPinnedLanes();
+                });
+            }
+
+            pinnedContainer.appendChild(lane);
+        });
+    }
+
+    // Event Listeners
+    if (btnFetch) {
+        btnFetch.addEventListener("click", fetchCandidates);
+    }
+
+    if (queryInput) {
+        queryInput.addEventListener("keydown", (e) => {
+            if (e.key === "Enter") {
+                e.preventDefault();
+                fetchCandidates();
+            }
+        });
+    }
+
+    // Query suggestion chips
+    document.querySelectorAll(".ranking-chip").forEach(chip => {
+        chip.addEventListener("click", () => {
+            const q = chip.getAttribute("data-query");
+            if (q && queryInput) {
+                queryInput.value = q;
+                fetchCandidates();
+            }
+        });
+    });
+
+    // Slider inputs (continuous live updates)
+    Object.values(sliders).forEach(slider => {
+        if (slider) {
+            slider.addEventListener("input", () => {
+                // Any manual slider movement leaves preset buttons unselected (custom state)
+                document.querySelectorAll(".ranking-preset-group .btn-preset").forEach(btn => btn.classList.remove("active"));
+                computeNormalizedWeights();
+            });
+            // Re-rank on slider release
+            slider.addEventListener("change", () => {
+                if (_rawCandidates.length > 0) {
+                    executeReRank();
+                }
+            });
+        }
+    });
+
+    // Preset buttons
+    document.querySelectorAll(".ranking-preset-group .btn-preset").forEach(btn => {
+        btn.addEventListener("click", () => {
+            const presetKey = btn.getAttribute("data-preset");
+            applyPreset(presetKey);
+        });
+    });
+
+    // Action buttons
+    if (btnReRank) {
+        btnReRank.addEventListener("click", executeReRank);
+    }
+
+    if (btnPin) {
+        btnPin.addEventListener("click", pinCurrentExperiment);
+    }
+
+    if (btnResetWeights) {
+        btnResetWeights.addEventListener("click", () => {
+            applyPreset("cinematic");
+        });
+    }
+
+    if (filterInput) {
+        filterInput.addEventListener("input", () => {
+            renderGrid();
+        });
+    }
+
+    if (sortSelect) {
+        sortSelect.addEventListener("change", () => {
+            executeReRank();
+        });
+    }
+
+    if (btnClearPinned) {
+        btnClearPinned.addEventListener("click", () => {
+            _pinnedExperiments = [];
+            renderPinnedLanes();
+        });
+    }
+
+    // Initialize default weights display
+    computeNormalizedWeights();
+}
+
 
 
 
